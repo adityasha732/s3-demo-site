@@ -3,358 +3,286 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>S3 Drive-style Demo (Password-protected Upload)</title>
-
-  <!-- Bootstrap CSS -->
+  <title>S3 Drive Demo — Full</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <style>
-    body { background:#f1f3f4; font-family: "Segoe UI", Roboto, Arial, sans-serif; }
-    .topbar { height:64px; background:white; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display:flex; align-items:center; padding:0 20px; }
-    .sidebar { width:240px; min-height: calc(100vh - 64px); background: white; padding-top:16px; box-shadow: 1px 0 0 rgba(0,0,0,0.04); }
-    .sidebar a { display:block; padding:12px 18px; color:#333; text-decoration:none; border-radius:6px; margin:4px 8px; }
-    .sidebar a:hover { background:#f5f7f9; text-decoration:none; }
-    .main { padding:24px; }
-    .card-drive { border-radius:12px; padding:18px; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-    .file-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:16px; margin-top:16px; }
-    .file-tile { background:#fff; border-radius:8px; padding:12px; text-align:center; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
-    .file-list { margin-top:16px; }
-    .logo-snap { height:42px; margin-right:12px; border-radius:6px; }
-    .search-input { width:420px; max-width:60vw; }
-    .btn-primary { background:#1a73e8; border:0; }
-    .progress { height: 14px; border-radius: 8px; }
-    .muted-small { color: #6b7280; font-size: .9rem; }
+    :root{--accent:#1a73e8}
+    body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8}
+    .topbar{height:64px;background:#fff;border-bottom:1px solid #eef2f6;display:flex;align-items:center;padding:0 20px}
+    .logo{height:42px;margin-right:12px;border-radius:6px}
+    .sidebar{width:220px;background:#fff;padding:16px;border-right:1px solid #eef2f6;min-height:calc(100vh - 64px)}
+    .card-panel{border-radius:12px;padding:18px;background:#fff;box-shadow:0 6px 18px rgba(12,26,44,0.04)}
+    .file-tile{border-radius:8px;padding:12px;background:#fbfdff;border:1px solid #eef4ff}
+    .muted{color:#6b7280}
+    .small{font-size:.9rem}
+    .actions button{margin-right:6px}
+    .star{cursor:pointer}
+    .grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+    .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9}
   </style>
 </head>
 <body>
-
-  <!-- Topbar -->
-  <div class="topbar d-flex align-items-center">
-    <!-- If the image path is invalid it will hide automatically -->
-    <img src="/mnt/data/fd9632f3-674f-43d7-8244-9007743e1f57.png" alt="logo" class="logo-snap" onerror="this.style.display='none'">
-    <h5 class="mb-0 me-auto">S3 Drive Demo</h5>
-
-    <input id="searchInput" class="form-control search-input me-3" placeholder="Search files..." />
-    <button class="btn btn-outline-secondary me-2" onclick="alert('Search is demo-only')">Search</button>
-    <div class="btn-group">
-      <button class="btn btn-secondary">Sign in</button>
+  <div class="topbar">
+    <img src="/mnt/data/300d1f38-be30-4b16-847f-e026d36997bf.png" class="logo" alt="logo" onerror="this.style.display='none'">
+    <h5 class="mb-0 me-3">S3 Drive Demo</h5>
+    <input id="search" class="form-control form-control-sm me-2" placeholder="Search files (client-side)" style="width:360px;max-width:40vw">
+    <button id="searchBtn" class="btn btn-sm btn-outline-secondary me-3">Search</button>
+    <div class="ms-auto d-flex gap-2">
+      <button id="signBtn" class="btn btn-sm btn-secondary">Sign in</button>
     </div>
   </div>
 
   <div class="d-flex">
-    <!-- Sidebar -->
-    <div class="sidebar">
-      <a href="#" class="fw-bold">My Drive</a>
-      <a href="#">Shared with me</a>
-      <a href="#">Recent</a>
-      <a href="#">Starred</a>
-      <a href="#">Trash</a>
+    <aside class="sidebar">
+      <a href="#" class="d-block mb-2 fw-bold">My Drive</a>
+      <a href="#" class="d-block muted small" data-view="all">All files</a>
+      <a href="#" class="d-block muted small" data-view="recent">Recent</a>
+      <a href="#" class="d-block muted small" data-view="starred">Starred</a>
+      <a href="#" class="d-block muted small" data-view="trash">Trash</a>
       <hr>
-      <a href="#" id="btnUploadQuick" class="text-primary">+ New (Upload)</a>
-    </div>
+      <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
+    </aside>
 
-    <!-- Main content -->
-    <div class="main flex-grow-1">
-      <!-- Upload card -->
-      <div class="card-drive">
-        <div class="d-flex align-items-center">
+    <main class="flex-grow-1 p-4">
+      <!-- Upload Panel -->
+      <div class="card-panel">
+        <div class="d-flex justify-content-between align-items-start mb-2">
           <div>
-            <h4 class="mb-1">Upload (password-protected)</h4>
-            <div class="muted-small">The page will request a presigned PUT URL from your backend (password required) and then upload directly to S3.</div>
+            <h5 class="m-0">Upload (presigned PUT)</h5>
+            <div class="muted small">This frontend requests presigned PUT URLs from your backend, uploads directly to S3, then notifies your backend to record metadata. If you don't have an API, paste a presigned PUT URL in the fallback field.</div>
+          </div>
+        </div>
+
+        <div class="row g-2 align-items-center mt-3">
+          <div class="col-auto">
+            <input id="fileInput" type="file" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <input id="keyInput" type="text" class="form-control form-control-sm" placeholder="storage key (optional)">
+          </div>
+          <div class="col-auto">
+            <input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password">
+          </div>
+          <div class="col-auto">
+            <button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload</button>
+          </div>
+        </div>
+
+        <div class="row g-2 mt-3">
+          <div class="col-md-8">
+            <input id="manualPut" class="form-control form-control-sm" placeholder="(Fallback) paste presigned PUT URL here">
+            <div class="muted small mt-1">If you have a Java app that generates a presigned PUT URL, paste it here and click "Upload using PUT".</div>
+          </div>
+          <div class="col-md-4 d-grid">
+            <button id="uploadManual" class="btn btn-outline-secondary btn-sm">Upload using pasted PUT URL</button>
           </div>
         </div>
 
         <div class="mt-3">
-          <div class="row g-3 align-items-center">
-            <div class="col-md-3">
-              <input type="file" id="fileInput" class="form-control" />
-            </div>
-
-            <div class="col-md-3">
-              <input type="password" id="uploadPassword" class="form-control" placeholder="Upload password" />
-            </div>
-
-            <div class="col-md-3">
-              <select id="fileType" class="form-select" title="File type (optional)">
-                <option value="auto">Auto-detect</option>
-                <option value="image">Image</option>
-                <option value="video">Video</option>
-                <option value="doc">Document</option>
-                <option value="app">App</option>
-              </select>
-            </div>
-
-            <div class="col-md-3 d-grid">
-              <button class="btn btn-primary" id="uploadBtn">Upload File (password)</button>
-            </div>
+          <div id="progressWrap" style="display:none" class="mb-2">
+            <div class="progress"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
           </div>
-
-          <div class="mt-3">
-            <div class="row g-3">
-              <div class="col-md-8">
-                <input type="text" id="manualPutUrl" class="form-control" placeholder="(Fallback) Paste presigned PUT URL here" />
-                <div class="muted-small mt-1">If you don't have a backend, paste a presigned PUT URL generated by your Java app here and click Upload.</div>
-              </div>
-              <div class="col-md-4 d-grid">
-                <button class="btn btn-outline-secondary" id="uploadManualBtn">Upload using pasted PUT URL</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-3">
-            <div class="progress" style="display:none;" id="uploadProgressWrap"><div id="uploadProgress" class="progress-bar" style="width:0%"></div></div>
-            <div id="uploadStatus" class="mt-2"></div>
-          </div>
+          <div id="uploadMsg" class="small muted"></div>
         </div>
       </div>
 
-      <!-- Files area -->
-      <div class="card-drive mt-4">
-        <div class="d-flex justify-content-between align-items-center">
-          <h5 class="mb-0">Files</h5>
+      <!-- Files Panel -->
+      <div class="card-panel mt-4">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="m-0">Files</h5>
           <div>
-            <button class="btn btn-sm btn-outline-secondary me-2" onclick="viewList()">List</button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="viewGrid()">Grid</button>
+            <button id="listViewBtn" class="btn btn-sm btn-outline-secondary me-1">List</button>
+            <button id="gridViewBtn" class="btn btn-sm btn-outline-secondary">Grid</button>
           </div>
         </div>
 
-        <div id="gridView" class="file-grid" style="display:none;">
-          <!-- sample tiles -->
-          <div class="file-tile"> <div class="fs-4">📄</div> <div class="mt-2">report.pdf</div> </div>
-          <div class="file-tile"> <div class="fs-4">🖼️</div> <div class="mt-2">photo.jpg</div> </div>
+        <div id="listArea">
+          <div id="filesList"></div>
         </div>
 
-        <div id="listView" class="file-list">
-          <table class="table table-borderless">
-            <thead class="text-muted small">
-              <tr><th>Name</th><th>Size</th><th>Actions</th></tr>
-            </thead>
-            <tbody id="filesTableBody"></tbody>
-          </table>
+        <div id="gridArea" style="display:none" class="mt-3">
+          <div id="filesGrid" class="grid-wrap"></div>
         </div>
       </div>
 
-      <!-- Download card -->
-      <div class="card-drive mt-4">
-        <h5>Download</h5>
-        <div class="row g-3 mt-2">
-          <div class="col-md-9">
-            <input type="text" id="getUrl" class="form-control" placeholder="Paste presigned GET URL" />
+      <!-- Download Panel -->
+      <div class="card-panel mt-4">
+        <h6 class="m-0">Download / Get Presigned GET</h6>
+        <div class="row g-2 mt-2">
+          <div class="col-md-8">
+            <input id="getUrlInput" class="form-control form-control-sm" placeholder="Paste presigned GET URL (or the output will be placed here)">
           </div>
-          <div class="col-md-3 d-grid">
-            <button class="btn btn-primary" id="downloadBtn">Download File</button>
-            <button class="btn btn-outline-secondary mt-2" id="getSignedBtn">Get Presigned GET (via API)</button>
+          <div class="col-md-4 d-grid">
+            <button id="openGetBtn" class="btn btn-sm btn-primary">Open URL</button>
+            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary mt-2">Request Presigned GET from API</button>
           </div>
         </div>
-        <div class="muted-small mt-2">If your API supports GET presign, the "Get Presigned GET" button will request a presigned GET for the selected file key.</div>
+        <div class="muted small mt-2">If your backend implements /presign-get, it will return a presigned GET for a requested key.</div>
       </div>
 
-    </div>
+    </main>
   </div>
 
 <script>
-/* ============================
-   CONFIG - Set these values
-   ============================ */
-const API_BASE = ""; // <-- Set to your API base URL, e.g. https://abcd1234.execute-api.ap-south-1.amazonaws.com/prod
-// The API must implement:
-// POST /presign  (headers: x-upload-password)  body: { filename, contentType, kind }  -> returns { url, key }
-// POST /presign-get (optional) body: { key } -> returns { url }
-/* ============================ */
+// =========== Config - change to match your backend ==============
+const API_BASE = ''; // e.g. 'https://your-backend.example.com'
+// Expected endpoints:
+// POST  ${API_BASE}/presign        { filename, contentType, key? }  -> { url, key }
+// POST  ${API_BASE}/presign-get    { key } -> { url }
+// POST  ${API_BASE}/files          { key, name, size, contentType } -> store metadata
+// DELETE ${API_BASE}/files/:key    -> delete object & metadata
+// ==============================================================
 
-const demoFiles = []; // client-side file list (populated after successful uploads)
+// Simple client-side model for files (used for demo + UI rendering)
+let files = [];
+let renderMode = 'list';
 
-function renderList(){
-  const tbody = document.getElementById('filesTableBody');
-  tbody.innerHTML = '';
-  demoFiles.forEach(f => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(f.name)}</td><td>${f.size}</td>
-      <td>
-        <button class="btn btn-sm btn-outline-primary me-1" onclick="promptGetAndFill('${f.name}')">Get URL</button>
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteLocal('${f.name}')">Remove</button>
-      </td>`;
-    tbody.appendChild(tr);
+// Helpers
+function escapeHtml(s){ return String(s||'').replace(/[&<>'\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c)); }
+function humanSize(n){ if(!n) return '0 B'; const units=['B','KB','MB','GB']; let i=0; while(n>=1024&&i<units.length-1){ n/=1024; i++; } return Math.round(n*10)/10 + ' ' + units[i]; }
+
+// UI references
+const fileInput = document.getElementById('fileInput');
+const keyInput = document.getElementById('keyInput');
+const pwInput = document.getElementById('pwInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const uploadManual = document.getElementById('uploadManual');
+const manualPut = document.getElementById('manualPut');
+const uploadMsg = document.getElementById('uploadMsg');
+const progressWrap = document.getElementById('progressWrap');
+const progressBar = document.getElementById('progressBar');
+const filesList = document.getElementById('filesList');
+const filesGrid = document.getElementById('filesGrid');
+const getUrlInput = document.getElementById('getUrlInput');
+
+// Render functions
+function renderFiles(){
+  // filter by search
+  const q = (document.getElementById('search').value||'').toLowerCase().trim();
+  const show = files.filter(f => !q || f.name.toLowerCase().includes(q) || f.key.toLowerCase().includes(q));
+
+  // list
+  filesList.innerHTML = '';
+  if(show.length===0){ filesList.innerHTML = '<div class="muted">No files</div>'; }
+  show.forEach(f=>{
+    const div = document.createElement('div'); div.className='list-row';
+    const left = document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
+    const right = document.createElement('div'); right.innerHTML = `<div class="small muted">${humanSize(f.size)}</div>`;
+
+    // actions
+    const actions = document.createElement('div'); actions.className='actions';
+    const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL';
+    getBtn.onclick = ()=> requestGetPresign(f.key);
+    const dlBtn = document.createElement('button'); dlBtn.className='btn btn-sm btn-outline-secondary me-1'; dlBtn.textContent='Open'; dlBtn.onclick = ()=> openPresigned(f.url || f.key);
+    const starBtn = document.createElement('button'); starBtn.className='btn btn-sm btn-outline-warning me-1'; starBtn.textContent='★'; starBtn.onclick = ()=> toggleStar(f.key);
+    const delBtn = document.createElement('button'); delBtn.className='btn btn-sm btn-outline-danger'; delBtn.textContent='Delete'; delBtn.onclick = ()=> deleteFile(f.key);
+    actions.append(getBtn, dlBtn, starBtn, delBtn);
+    right.appendChild(actions);
+
+    div.append(left,right);
+    filesList.appendChild(div);
   });
-}
-renderList();
 
-function viewGrid(){ document.getElementById('gridView').style.display='grid'; document.getElementById('listView').style.display='none'; }
-function viewList(){ document.getElementById('gridView').style.display='none'; document.getElementById('listView').style.display='block'; }
-
-// utility to escape HTML text for table
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, (m)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
-
-/* -------- Upload logic (primary: use API presign) -------- */
-document.getElementById('uploadBtn').addEventListener('click', async () => {
-  const file = document.getElementById('fileInput').files[0];
-  const pw = document.getElementById('uploadPassword').value.trim();
-  const kind = document.getElementById('fileType').value;
-
-  if (!file) return alert('Please select a file.');
-  if (!API_BASE){
-    return alert('No API configured. Either set API_BASE in the script or use the manual presigned URL field.');
-  }
-  if (!pw) return alert('Enter upload password.');
-
-  const body = { filename: file.name, contentType: file.type || 'application/octet-stream', kind };
-  try {
-    const res = await fetch(API_BASE + '/presign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-upload-password': pw },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error('Presign failed: ' + txt);
-    }
-    const { url, key } = await res.json();
-    await uploadToS3(url, file);
-    demoFiles.unshift({ name: key, size: formatBytes(file.size) });
-    renderList();
-    showStatus('Upload finished: ' + key, true);
-  } catch (err) {
-    showStatus('Error: ' + err.message, false);
-    console.error(err);
-    alert('Upload error: ' + err.message);
-  }
-});
-
-/* -------- Fallback manual PUT URL upload (if no API) -------- */
-document.getElementById('uploadManualBtn').addEventListener('click', async () => {
-  const file = document.getElementById('fileInput').files[0];
-  const url = document.getElementById('manualPutUrl').value.trim();
-  if (!file || !url) return alert('Choose file and paste a presigned PUT URL.');
-  try {
-    await uploadToS3(url, file);
-    // derive key from URL (best-effort)
-    const key = url.split('?')[0].split('/').slice(3).join('/');
-    demoFiles.unshift({ name: key, size: formatBytes(file.size) });
-    renderList();
-    showStatus('Manual upload finished: ' + key, true);
-  } catch (err) {
-    showStatus('Error: ' + err.message, false);
-    alert('Manual upload error: ' + err.message);
-  }
-});
-
-/* -------- helper: upload file to S3 using PUT url with progress -------- */
-async function uploadToS3(url, file) {
-  showProgress(0);
-  const xhr = new XMLHttpRequest();
-  return new Promise((resolve, reject) => {
-    xhr.open('PUT', url, true);
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        showProgress(100);
-        resolve();
-      } else {
-        reject(new Error('Upload failed: ' + xhr.status));
-      }
-    };
-    xhr.onerror = () => reject(new Error('Network error during upload'));
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round(e.loaded / e.total * 100);
-        showProgress(pct);
-      }
-    };
-    xhr.send(file);
+  // grid
+  filesGrid.innerHTML='';
+  show.forEach(f=>{
+    const t = document.createElement('div'); t.className='file-tile';
+    t.innerHTML = `<div style="font-size:28px">📄</div><div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div><div class="muted small">${humanSize(f.size)}</div>
+      <div style="margin-top:8px"><button class='btn btn-sm btn-outline-primary' onclick="requestGetPresign('${encodeURIComponent(f.key)}')">Get URL</button></div>`;
+    filesGrid.appendChild(t);
   });
 }
 
-function showProgress(pct){
-  const wrap = document.getElementById('uploadProgressWrap');
-  const bar = document.getElementById('uploadProgress');
-  wrap.style.display = pct === 0 ? 'none' : 'block';
-  bar.style.width = pct + '%';
-  bar.textContent = pct + '%';
-}
+// Toggle view buttons
+document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderMode='list'; });
+document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderMode='grid'; });
 
-function showStatus(text, ok){
-  const el = document.getElementById('uploadStatus');
-  el.textContent = text;
-  el.style.color = ok ? 'green' : 'red';
-  setTimeout(()=>{ el.textContent = ''; }, 8000);
-}
-
-function formatBytes(bytes){
-  if (!bytes) return '0 B';
-  const sizes = ['B','KB','MB','GB','TB'];
-  const i = Math.floor(Math.log(bytes)/Math.log(1024));
-  return Math.round(bytes/Math.pow(1024,i)) + ' ' + sizes[i];
-}
-
-/* -------- Download / GET presign helpers -------- */
-document.getElementById('downloadBtn').addEventListener('click', () => {
-  const url = document.getElementById('getUrl').value.trim();
-  if (!url) return alert('Paste the presigned GET URL first.');
+// Basic actions (client-only simulation where backend not configured)
+function toggleStar(key){ const it = files.find(x=>x.key===key); if(!it) return; it.star = !it.star; renderFiles(); }
+function deleteFile(key){ if(!confirm('Delete '+key+'? This demo will simulate removal only.')) return; const idx = files.findIndex(x=>x.key===key); if(idx>=0) files.splice(idx,1); renderFiles(); }
+function openPresigned(url){ // if url looks like a presigned URL open directly otherwise alert
+  if(!url) return alert('No URL available for this file. Use Get URL to request a presigned GET from the backend.');
   window.open(url, '_blank');
-});
+}
 
-// optional: call API to get presigned GET for a key (requires API support)
-document.getElementById('getSignedBtn').addEventListener('click', async () => {
-  if (!API_BASE) return alert('No API configured for GET presign.');
-  const key = prompt('Enter file key to presign (example: uploads/12345-file.jpg):');
-  if (!key) return;
-  try {
-    const res = await fetch(API_BASE + '/presign-get', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key })
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(t);
+// Search
+document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
+document.getElementById('search').addEventListener('keydown', e=>{ if(e.key==='Enter') renderFiles(); });
+
+// -------- Upload flow: primary (request presigned PUT from API) ---------
+uploadBtn.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  if(!file) return alert('Pick a file to upload');
+  const key = keyInput.value.trim() || file.name;
+  const pw = pwInput.value.trim();
+  if(API_BASE && !pw) return alert('Enter upload password');
+
+  // 1) request presign
+  try{
+    setProgress(0); setMessage('Requesting presigned URL...');
+    let presignUrl = manualPut.value.trim();
+    let realKey = key;
+    if(API_BASE){
+      const resp = await fetch(API_BASE + '/presign', { method:'POST', headers: {'Content-Type':'application/json', 'x-upload-password': pw }, body: JSON.stringify({ filename:file.name, contentType:file.type, key }) });
+      if(!resp.ok) throw new Error('Presign request failed: ' + resp.status);
+      const j = await resp.json(); presignUrl = j.url; realKey = j.key || key;
     }
-    const { url } = await res.json();
-    document.getElementById('getUrl').value = url;
-    alert('Presigned GET URL placed in input. Click Download.');
-  } catch (err) {
-    alert('Error getting presigned GET: ' + err.message);
-  }
+    if(!presignUrl) throw new Error('No presigned URL available');
+
+    // 2) upload via PUT with progress
+    await xhrUpload(presignUrl, file);
+
+    // 3) notify backend to index the file (optional)
+    if(API_BASE){ await fetch(API_BASE + '/files', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) }); }
+
+    files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, url: API_BASE ? undefined : presignUrl });
+    setMessage('Upload finished: ' + realKey, true);
+    setProgress(100); renderFiles();
+    // reset
+    fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
+  }catch(err){ console.error(err); setMessage('Upload error: '+err.message,false); setProgress(0); }
 });
 
-/* -------- small helpers for demo file actions -------- */
-function promptGetAndFill(key){
-  if (API_BASE) {
-    if (!confirm('Would you like to request a presigned GET URL from the backend for: ' + key + '?')) return;
-    (async ()=>{
-      try {
-        const res = await fetch(API_BASE + '/presign-get', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key })
-        });
-        if (!res.ok) { const t = await res.text(); throw new Error(t); }
-        const { url } = await res.json();
-        document.getElementById('getUrl').value = url;
-        alert('Presigned GET placed in the input.');
-      } catch (e) {
-        alert('Error: ' + e.message);
-      }
-    })();
-  } else {
-    const sample = prompt('Paste the presigned GET URL for: ' + key + '\n(Use your Java app to generate it)');
-    if (sample) document.getElementById('getUrl').value = sample;
-  }
-}
-
-function deleteLocal(key){
-  if (!confirm('Remove ' + key + ' from the page? This does not delete it in S3.')) return;
-  const idx = demoFiles.findIndex(d => d.name === key);
-  if (idx >= 0) demoFiles.splice(idx, 1);
-  renderList();
-}
-
-/* ======= Utility: quick upload button behaviour ======= */
-document.getElementById('btnUploadQuick').addEventListener('click', () => {
-  document.getElementById('fileInput').scrollIntoView({behavior:'smooth'});
-  document.getElementById('fileInput').focus();
+// Manual upload using pasted PUT URL
+uploadManual.addEventListener('click', async ()=>{
+  const file = fileInput.files[0]; const url = manualPut.value.trim(); if(!file || !url) return alert('Select file and paste a presigned PUT URL');
+  try{ setMessage('Uploading via pasted PUT URL...'); await xhrUpload(url,file); files.unshift({ key: url.split('?')[0].split('/').slice(3).join('/'), name: file.name, size: file.size, contentType: file.type, url }); renderFiles(); setMessage('Manual upload finished',true); }catch(e){ setMessage('Manual upload error: '+e.message,false); }
 });
 
-/* ======= End of script ======= */
+// xhr upload with progress
+function xhrUpload(url, file){ return new Promise((resolve,reject)=>{
+  const xhr = new XMLHttpRequest(); xhr.open('PUT', url, true);
+  xhr.onload = ()=>{ if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); };
+  xhr.onerror = ()=>reject(new Error('Network error'));
+  xhr.upload.onprogress = e=>{ if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
+  xhr.send(file);
+}); }
+
+function setProgress(pct){ progressWrap.style.display = pct>0 && pct<100 ? 'block' : (pct===100 ? 'block' : 'none'); progressBar.style.width = pct + '%'; progressBar.textContent = pct + '%'; }
+function setMessage(text, ok=true){ uploadMsg.textContent = text; uploadMsg.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ uploadMsg.textContent=''; }, 7000); }
+
+// -------- Request presigned GET from API (if configured) --------
+async function requestGetPresign(key){
+  const decoded = decodeURIComponent(key);
+  if(!API_BASE) return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
+  try{
+    const resp = await fetch(API_BASE + '/presign-get', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key: decoded }) });
+    if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
+    const j = await resp.json(); getUrlInput.value = j.url; alert('Presigned GET placed in the input');
+  }catch(e){ alert('Error requesting GET presign: '+e.message); }
+}
+
+// open URL button
+document.getElementById('openGetBtn').addEventListener('click', ()=>{
+  const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank');
+});
+// request GET from API via prompt
+document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
+
+// initial demo files (if any)
+files = [ { key:'images/test.jpg', name:'images/test.jpg', size:24567 }, { key:'docs/report.pdf', name:'docs/report.pdf', size:120345 } ];
+renderFiles();
+
 </script>
-
 </body>
 </html>
