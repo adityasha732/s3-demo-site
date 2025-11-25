@@ -4,16 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>CloudVault — S3 Drive Demo</title>
+
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
   <style>
-    :root{--accent:#1a73e8}
-    body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8}
+    :root { --accent:#1a73e8; --muted:#6b7280; }
+    body { font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8; margin:0; }
     .topbar{height:64px;background:#fff;border-bottom:1px solid #eef2f6;display:flex;align-items:center;padding:0 20px}
     .logo{height:40px;margin-right:12px;border-radius:6px;object-fit:cover;cursor:pointer}
     .sidebar{width:220px;background:#fff;padding:16px;border-right:1px solid #eef2f6;min-height:calc(100vh - 64px)}
     .card-panel{border-radius:12px;padding:18px;background:#fff;box-shadow:0 6px 18px rgba(12,26,44,0.04)}
     .file-tile{border-radius:8px;padding:12px;background:#fbfdff;border:1px solid #eef4ff}
-    .muted{color:#6b7280}
+    .muted{color:var(--muted)}
     .small{font-size:.9rem}
     .actions button{margin-right:6px}
     .star{cursor:pointer}
@@ -24,11 +26,16 @@
     #progressWrap { position:relative; }
     #progressLabel { position:relative; margin-top:6px; text-align:center; font-weight:600; color:#fff; margin-left:auto; margin-right:auto; width:100%; transform: translateY(-28px); pointer-events:none; }
     #siteTitle { cursor:pointer; user-select: none; }
+    .nav-item { color:var(--muted); display:block; margin-bottom:6px; text-decoration:none; }
+    .nav-item.active { color:var(--accent); font-weight:700; }
+    .meta-muted { color:#94a3b8; font-size:.85rem; }
+    .btn-outline-warning { color: #b45309; border-color:#fbbf24; }
   </style>
 </head>
 <body>
   <div class="topbar">
-    <img id="topLogo" src="asset/sing-crayon-shin-chan.gif" class="logo" alt="CloudVault logo" onerror="this.style.display='none'">
+    <!-- using uploaded file path as the logo source -->
+    <img id="topLogo" src="/mnt/data/cfc48cb5-7ecd-4cb4-9ea7-2764acdde733.png" class="logo" alt="CloudVault logo" onerror="this.style.display='none'">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
 
     <input id="search" class="form-control form-control-sm me-2" placeholder="Search files (client-side)" style="width:360px;max-width:40vw">
@@ -43,10 +50,10 @@
   <div class="d-flex">
     <aside class="sidebar">
       <a href="#" class="d-block mb-2 fw-bold">My Drive</a>
-      <a href="#" class="d-block muted small" data-view="all">All files</a>
-      <a href="#" class="d-block muted small" data-view="recent">Recent</a>
-      <a href="#" class="d-block muted small" data-view="starred">Starred</a>
-      <a href="#" class="d-block muted small" data-view="trash">Trash</a>
+      <a href="#" class="nav-item" data-view="all">All files <span id="countAll" class="meta-muted"></span></a>
+      <a href="#" class="nav-item" data-view="recent">Recent <span id="countRecent" class="meta-muted"></span></a>
+      <a href="#" class="nav-item" data-view="starred">Starred <span id="countStar" class="meta-muted"></span></a>
+      <a href="#" class="nav-item" data-view="trash">Trash <span id="countTrash" class="meta-muted"></span></a>
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
     </aside>
@@ -138,67 +145,36 @@
   </div>
 
 <script>
-// =========== Config - change to match your backend ==============
-const API_BASE = ''; // e.g. 'https://your-backend.example.com'
-// Backend endpoints described in the Java example below.
-// ==============================================================
+/*
+  CloudVault demo front-end
+  - Set API_BASE to your backend URL to enable full integration.
+  - Demo mode uses localStorage key 'cv_files' to persist file metadata locally.
+*/
+const API_BASE = ''; // e.g. 'https://your-backend.example.com' (leave empty to run demo-local)
 
-// refresh when clicking site title or logo
-document.getElementById('siteTitle').addEventListener('click', () => location.reload());
-document.getElementById('topLogo').addEventListener('click', () => location.reload());
-
-// auth token storage
+// ---------- Auth helpers (very small) ----------
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
 function getToken(){ return localStorage.getItem('cv_token'); }
-
-// extract token from URL on redirect from backend auth callback
-(function maybeConsumeTokenFromUrl(){
-  const qp = new URLSearchParams(window.location.search);
-  const t = qp.get('token');
-  if(t){ setToken(t); qp.delete('token'); const newq = qp.toString(); history.replaceState({}, '', location.pathname + (newq?('?'+newq):'')); }
-})();
-
-// show signed-in user
-function setUserInfo(name){ document.getElementById('userInfo').textContent = name ? ('Signed in: '+name) : ''; document.getElementById('signBtn').textContent = name ? 'Sign out' : 'Sign in'; }
-
-async function whoami(){
-  const token = getToken(); if(!token) { setUserInfo(null); return null; }
-  try{
-    const resp = await fetch(API_BASE + '/whoami', { headers: { 'Authorization': 'Bearer '+token } });
-    if(!resp.ok){ setToken(null); setUserInfo(null); return null; }
-    const j = await resp.json(); setUserInfo(j.name || j.sub); return j;
-  }catch(e){ setToken(null); setUserInfo(null); return null; }
-}
-
-// sign button
+function authHeaders(h={}){ const t=getToken(); if(t) h['Authorization']='Bearer '+t; return h; }
 document.getElementById('signBtn').addEventListener('click', ()=>{
-  const token = getToken();
-  if(!token){
-    // start login flow via backend (backend redirects to Cognito hosted UI)
-    if(!API_BASE) return alert('Set API_BASE in the page to enable login flow.');
+  if(!getToken()){
+    if(!API_BASE) { alert('No backend configured — demo mode.'); return; }
     window.location.href = API_BASE + '/login';
-  } else {
-    // sign out
-    setToken(null); setUserInfo(null); alert('Signed out');
-  }
+  } else { setToken(null); alert('Signed out'); updateUserInfo(); }
 });
+function updateUserInfo(){ document.getElementById('userInfo').textContent = getToken() ? 'Signed in' : ''; }
+updateUserInfo();
 
-// call whoami on load
-whoami();
+// refresh when clicking title/logo
+document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
+document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
 
-// ... existing UI & upload logic below, but now attaching Authorization header when calling API_BASE endpoints
+// ---------- State ----------
+let files = []; // array of { key, name, size, contentType, modified (ms), star, deleted (bool), url }
+let view = 'all'; // all | recent | starred | trash
+let renderMode = 'list'; // list | grid
 
-// helper to attach auth headers
-function authHeaders(headers = {}){ const t = getToken(); if(t) headers['Authorization'] = 'Bearer ' + t; return headers; }
-
-// rest of your client logic (render, upload) with small changes: when calling API_BASE endpoints include auth header
-// For brevity, copy/paste your previous render/upload functions but ensure fetch calls include authHeaders()
-
-// (To keep this example concise I will re-use your earlier functions but modify API calls:)
-let files = [];
-let renderMode = 'list';
-function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'" :'&#39;'}[c]||c)); }
-function humanSize(n){ if(!n) return '0 B'; const units=['B','KB','MB','GB']; let i=0; while(n>=1024&&i<units.length-1){ n/=1024; i++; } return Math.round(n*10)/10 + ' ' + units[i]; }
+// DOM refs
 const fileInput = document.getElementById('fileInput');
 const keyInput = document.getElementById('keyInput');
 const pwInput = document.getElementById('pwInput');
@@ -208,87 +184,338 @@ const manualPut = document.getElementById('manualPut');
 const uploadMsg = document.getElementById('uploadMsg');
 const progressWrap = document.getElementById('progressWrap');
 const progressBar = document.getElementById('progressBar');
+const progressLabel = document.getElementById('progressLabel');
 const filesList = document.getElementById('filesList');
 const filesGrid = document.getElementById('filesGrid');
 const getUrlInput = document.getElementById('getUrlInput');
-const progressLabel = document.getElementById('progressLabel');
+
+// ---------- Persistence (demo mode) ----------
+const STORE_KEY = 'cv_files_v1';
+function saveLocalFiles(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
+function loadLocalFiles(){ const raw = localStorage.getItem(STORE_KEY); if(!raw) return false; try{ files = JSON.parse(raw); return true; }catch(e){ return false; } }
+
+// ---------- Utility ----------
+function nowMs(){ return Date.now(); }
+function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
+function humanSize(n){ if(!n && n!==0) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
+function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
+
+// ---------- Demo seed (if no backend and no saved data) ----------
+function seedDemoIfNeeded(){
+  if(API_BASE) return;
+  if(loadLocalFiles()) return;
+  files = [
+    { key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false },
+    { key:'docs/report.pdf', name:'docs/report.pdf', size:120345, modified:nowMs()-86400000*10, star:true, deleted:false },
+    { key:'images/text4.jpg', name:'istockphoto-1363516705-612x612.jpg', size:6678, modified:nowMs()-3600000, star:false, deleted:false }
+  ];
+  saveLocalFiles();
+}
+seedDemoIfNeeded();
+
+// ---------- Fetch files from backend (if configured) ----------
+async function fetchFilesFromBackend(){
+  if(!API_BASE) return false;
+  try{
+    const resp = await fetch(API_BASE + '/files', { headers: authHeaders() });
+    if(!resp.ok) throw new Error('Fetch files failed: '+resp.status);
+    const j = await resp.json();
+    // backend should return array of objects with at least key,name,size,modified,star,deleted
+    files = j.map(x => ({ key:x.key, name:x.name || x.key.split('/').slice(-1).join('/'), size:x.size || 0, modified:x.modified || nowMs(), star:!!x.star, deleted:!!x.deleted, url:x.url }));
+    saveLocalFiles();
+    return true;
+  }catch(e){
+    console.warn('Could not fetch files from backend:', e);
+    return false;
+  }
+}
+
+// attempt backend fetch on load (if available), fall back to local
+(async ()=>{ if(API_BASE) await fetchFilesFromBackend(); renderFiles(); updateCounts(); })();
+
+// ---------- Render / Filtering ----------
+function updateCounts(){
+  const all = files.filter(f=>!f.deleted).length;
+  const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
+  const star = files.filter(f=>!f.deleted && f.star).length;
+  const trash = files.filter(f=>f.deleted).length;
+  document.getElementById('countAll').textContent = all ? ' ('+all+')' : '';
+  document.getElementById('countRecent').textContent = recent ? ' ('+recent+')' : '';
+  document.getElementById('countStar').textContent = star ? ' ('+star+')' : '';
+  document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : '';
+}
+
+function getFilteredFiles(){
+  const q = (document.getElementById('search').value || '').toLowerCase().trim();
+  let list = files.slice(); // clone
+  if(view==='recent') list = list.filter(f=>!f.deleted && ((nowMs()- (f.modified||0)) <= 1000*60*60*24*30)); // 30 days
+  if(view==='starred') list = list.filter(f=>!f.deleted && f.star);
+  if(view==='trash') list = list.filter(f=>f.deleted);
+  if(view==='all') list = list.filter(f=>!f.deleted);
+  if(q) list = list.filter(f => (f.name||'').toLowerCase().includes(q) || (f.key||'').toLowerCase().includes(q));
+  // sort: by modified desc
+  list.sort((a,b)=> (b.modified||0) - (a.modified||0));
+  return list;
+}
+
 function renderFiles(){
-  const q = (document.getElementById('search').value||'').toLowerCase().trim();
-  const show = files.filter(f => !q || f.name.toLowerCase().includes(q) || f.key.toLowerCase().includes(q));
+  const list = getFilteredFiles();
   filesList.innerHTML = '';
-  if(show.length===0){ filesList.innerHTML = '<div class="muted">No files</div>'; }
-  show.forEach(f=>{
+  if(list.length===0){
+    filesList.innerHTML = '<div class="muted">No files</div>';
+  }
+  list.forEach(f=>{
     const div = document.createElement('div'); div.className='list-row';
-    const left = document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
-    const right = document.createElement('div'); right.innerHTML = `<div class="small muted">${humanSize(f.size)}</div>`;
+    const left = document.createElement('div');
+    left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
+    const right = document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
+    const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size) + (f.modified?(' • '+formatDate(f.modified)):'');
     const actions = document.createElement('div'); actions.className='actions';
+
     const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL';
     getBtn.onclick = ()=> requestGetPresign(f.key);
-    const dlBtn = document.createElement('button'); dlBtn.className='btn btn-sm btn-outline-secondary me-1'; dlBtn.textContent='Open'; dlBtn.onclick = ()=> openPresigned(f.url || f.key);
-    const starBtn = document.createElement('button'); starBtn.className='btn btn-sm btn-outline-warning me-1'; starBtn.textContent='★'; starBtn.onclick = ()=> toggleStar(f.key);
-    const delBtn = document.createElement('button'); delBtn.className='btn btn-sm btn-outline-danger'; delBtn.textContent='Delete'; delBtn.onclick = ()=> deleteFile(f.key);
-    actions.append(getBtn, dlBtn, starBtn, delBtn);
+
+    const openBtn = document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary me-1'; openBtn.textContent='Open';
+    openBtn.onclick = ()=> openPresigned(f.url, f.key);
+
+    const starBtn = document.createElement('button'); starBtn.className='btn btn-sm ' + (f.star ? 'btn-warning' : 'btn-outline-warning') + ' me-1'; starBtn.textContent = f.star ? '★' : '☆';
+    starBtn.onclick = ()=> toggleStar(f.key);
+
+    const delBtn = document.createElement('button'); delBtn.className='btn btn-sm ' + (view==='trash' ? 'btn-danger' : 'btn-outline-danger');
+    delBtn.textContent = view==='trash' ? 'Delete Permanently' : 'Delete';
+    delBtn.onclick = ()=> { if(view==='trash') permanentlyDelete(f.key); else moveToTrash(f.key); };
+
+    const restoreBtn = document.createElement('button'); restoreBtn.className='btn btn-sm btn-outline-success me-1'; restoreBtn.textContent='Restore';
+    restoreBtn.onclick = ()=> restoreFromTrash(f.key);
+
+    actions.appendChild(getBtn);
+    if(!f.deleted) actions.appendChild(openBtn);
+    if(f.deleted){
+      actions.appendChild(restoreBtn);
+      actions.appendChild(delBtn);
+    } else {
+      actions.appendChild(starBtn);
+      actions.appendChild(delBtn);
+    }
+
+    right.appendChild(meta);
     right.appendChild(actions);
-    div.append(left,right);
+
+    div.appendChild(left);
+    div.appendChild(right);
     filesList.appendChild(div);
   });
-  filesGrid.innerHTML='';
-  show.forEach(f=>{
+
+  // grid
+  filesGrid.innerHTML = '';
+  list.forEach(f=>{
     const t = document.createElement('div'); t.className='file-tile';
-    t.innerHTML = `<div style="font-size:28px">📄</div><div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div><div class="muted small">${humanSize(f.size)}</div>
-      <div style="margin-top:8px"><button class='btn btn-sm btn-outline-primary' onclick="requestGetPresign('${encodeURIComponent(f.key)}')">Get URL</button></div>`;
+    t.innerHTML = `<div style="font-size:26px">${guessEmojiForName(f.name)}</div>
+      <div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div>
+      <div class="muted small">${humanSize(f.size)}</div>
+      <div class="mt-2">
+        <button class="btn btn-sm btn-outline-primary me-1">Get URL</button>
+        ${f.deleted ? '<button class="btn btn-sm btn-outline-success me-1">Restore</button>' : '<button class="btn btn-sm btn-outline-secondary me-1">Open</button>'}
+      </div>`;
+    // Attach events for the dynamic buttons:
+    const btns = t.querySelectorAll('button');
+    if(btns[0]) btns[0].onclick = ()=> requestGetPresign(f.key);
+    if(f.deleted){
+      if(btns[1]) btns[1].onclick = ()=> restoreFromTrash(f.key);
+    } else {
+      if(btns[1]) btns[1].onclick = ()=> openPresigned(f.url, f.key);
+    }
     filesGrid.appendChild(t);
   });
+
+  updateCounts();
 }
-document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderMode='list'; });
-document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderMode='grid'; });
-function toggleStar(key){ const it = files.find(x=>x.key===key); if(!it) return; it.star = !it.star; // optionally send to backend to persist
-  fetch(API_BASE + '/files/star', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key, star: !!it.star }) }).catch(()=>{}); renderFiles(); }
-function deleteFile(key){ if(!confirm('Delete '+key+'?')) return; const idx = files.findIndex(x=>x.key===key); if(idx>=0) files.splice(idx,1); fetch(API_BASE + '/files/'+encodeURIComponent(key), { method:'DELETE', headers: authHeaders() }).catch(()=>{}); renderFiles(); }
-function openPresigned(url){ if(!url) return alert('No URL available for this file. Use Get URL to request a presigned GET from the backend.'); window.open(url, '_blank'); }
-document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
-document.getElementById('search').addEventListener('keydown', e=>{ if(e.key==='Enter') renderFiles(); });
-// upload flow
+
+// small heuristic for icon
+function guessEmojiForName(name){
+  const n = (name||'').toLowerCase();
+  if(n.endsWith('.jpg')||n.endsWith('.png')||n.endsWith('.gif')) return '🖼️';
+  if(n.endsWith('.pdf')) return '📄';
+  if(n.endsWith('.zip')||n.endsWith('.tar')||n.endsWith('.gz')) return '🗜️';
+  return '📁';
+}
+
+// ---------- Actions ----------
+function toggleStar(key){
+  const it = files.find(x=>x.key===key);
+  if(!it) return;
+  it.star = !it.star;
+  // persist to backend if available
+  if(API_BASE){
+    fetch(API_BASE + '/files/star', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key, star: !!it.star }) }).catch(()=>{});
+  }
+  saveLocalFiles();
+  renderFiles();
+}
+
+function moveToTrash(key){
+  if(!confirm('Move to Trash?')) return;
+  const it = files.find(x=>x.key===key);
+  if(!it) return;
+  it.deleted = true;
+  it.modified = nowMs();
+  if(API_BASE){
+    fetch(API_BASE + '/files/trash', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key }) }).catch(()=>{});
+  }
+  saveLocalFiles();
+  renderFiles();
+}
+
+function restoreFromTrash(key){
+  const it = files.find(x=>x.key===key);
+  if(!it) return;
+  it.deleted = false;
+  it.modified = nowMs();
+  if(API_BASE){
+    fetch(API_BASE + '/files/restore', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key }) }).catch(()=>{});
+  }
+  saveLocalFiles();
+  renderFiles();
+}
+
+function permanentlyDelete(key){
+  if(!confirm('Permanently delete? This cannot be undone.')) return;
+  const idx = files.findIndex(x=>x.key===key);
+  if(idx===-1) return;
+  files.splice(idx,1);
+  if(API_BASE){
+    fetch(API_BASE + '/files/'+encodeURIComponent(key), { method:'DELETE', headers: authHeaders() }).catch(()=>{});
+  }
+  saveLocalFiles();
+  renderFiles();
+}
+
+function openPresigned(url, key){
+  if(url){
+    window.open(url, '_blank'); return;
+  }
+  if(!API_BASE) { alert('No API configured: cannot open. Use Get URL to get a presigned GET for ' + key); return; }
+  // fallback: ask backend for presigned get
+  requestGetPresign(encodeURIComponent(key));
+}
+
+// ---------- Upload flows ----------
 uploadBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0]; if(!file) return alert('Pick a file to upload');
-  const key = keyInput.value.trim() || file.name;
+  const file = fileInput.files[0];
+  if(!file) return alert('Pick a file to upload');
+  const keyVal = keyInput.value.trim() || file.name;
   try{
     setProgress(0);
     setMessage('Requesting presigned URL...', true);
     let presignUrl = manualPut.value.trim();
-    let realKey = key;
+    let realKey = keyVal;
     if(API_BASE){
-      const resp = await fetch(API_BASE + '/presign', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ filename:file.name, contentType:file.type, key }) });
+      const resp = await fetch(API_BASE + '/presign', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ filename:file.name, contentType:file.type, key: keyVal }) });
       if(!resp.ok) throw new Error('Presign request failed: ' + resp.status);
-      const j = await resp.json(); presignUrl = j.url; realKey = j.key || key;
+      const j = await resp.json();
+      presignUrl = j.url; realKey = j.key || keyVal;
     }
     if(!presignUrl) throw new Error('No presigned URL available');
     await xhrUpload(presignUrl, file);
-    if(API_BASE){ await fetch(API_BASE + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) }); }
-    files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, url: API_BASE ? undefined : presignUrl });
-    setMessage('Upload finished: ' + realKey, true); setProgress(100); renderFiles();
+    // notify backend to register metadata
+    if(API_BASE){
+      await fetch(API_BASE + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) });
+    }
+    files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
+    saveLocalFiles();
+    setMessage('Upload finished: ' + realKey, true);
+    setProgress(100);
+    renderFiles();
     fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
-  }catch(err){ console.error(err); setMessage('Upload error: '+err.message,false); setProgress(0); }
+  }catch(err){ console.error(err); setMessage('Upload error: '+(err.message||err), false); setProgress(0); }
 });
-uploadManual.addEventListener('click', async ()=>{ const file = fileInput.files[0]; const url = manualPut.value.trim(); if(!file || !url) return alert('Select file and paste a presigned PUT URL'); try{ setMessage('Uploading via pasted PUT URL...'); await xhrUpload(url,file); files.unshift({ key: url.split('?')[0].split('/').slice(3).join('/'), name: file.name, size: file.size, contentType: file.type, url }); renderFiles(); setMessage('Manual upload finished',true); }catch(e){ setMessage('Manual upload error: '+e.message,false); }});
-function xhrUpload(url, file){ return new Promise((resolve,reject)=>{ const xhr = new XMLHttpRequest(); xhr.open('PUT', url, true); xhr.onload = ()=>{ if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); }; xhr.onerror = ()=>reject(new Error('Network error')); xhr.upload.onprogress = e=>{ if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); }; xhr.send(file); }); }
-function setProgress(pct) { pct = Math.max(0, Math.min(100, Math.round(pct))); if (pct === 0) { progressWrap.style.display = 'none'; } else { progressWrap.style.display = 'block'; } progressBar.style.width = pct + '%'; progressLabel.textContent = pct + '%'; if (pct === 100) setTimeout(()=>{}, 700); }
-function setMessage(text, ok=true){ uploadMsg.textContent = text; uploadMsg.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ uploadMsg.textContent=''; }, 7000); }
+
+uploadManual.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  const url = manualPut.value.trim();
+  if(!file || !url) return alert('Select file and paste a presigned PUT URL');
+  try{
+    setMessage('Uploading via pasted PUT URL...');
+    await xhrUpload(url, file);
+    const derivedKey = url.split('?')[0].split('/').slice(3).join('/') || file.name;
+    files.unshift({ key: derivedKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url });
+    saveLocalFiles();
+    renderFiles();
+    setMessage('Manual upload finished', true);
+  }catch(e){ setMessage('Manual upload error: '+e.message, false); }
+});
+
+function xhrUpload(url, file){
+  return new Promise((resolve,reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    xhr.onload = ()=> { if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); };
+    xhr.onerror = ()=> reject(new Error('Network error'));
+    xhr.upload.onprogress = e=> { if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
+    xhr.send(file);
+  });
+}
+
+function setProgress(pct){
+  pct = Math.max(0, Math.min(100, Math.round(pct)));
+  if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block';
+  progressBar.style.width = pct + '%';
+  progressLabel.textContent = pct + '%';
+  if(pct===100) setTimeout(()=>{ /* hide later if desired */ }, 700);
+}
+
+function setMessage(text, ok=true){
+  uploadMsg.textContent = text;
+  uploadMsg.style.color = ok ? 'green' : 'crimson';
+  setTimeout(()=>{ uploadMsg.textContent=''; }, 7000);
+}
+
+// ---------- Presign GET request ----------
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
-  if(!API_BASE) return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
+  if(!API_BASE) {
+    // demo: if file has url stored, use that
+    const f = files.find(x=>x.key===decoded);
+    if(f && f.url) { getUrlInput.value = f.url; alert('Presigned GET placed in the input'); return; }
+    return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
+  }
   try{
     const resp = await fetch(API_BASE + '/presign-get', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: decoded }) });
-    if(!resp.ok) throw new Error('GET presign failed: ' + resp.status);
-    const j = await resp.json(); getUrlInput.value = j.url; alert('Presigned GET placed in the input');
+    if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
+    const j = await resp.json();
+    getUrlInput.value = j.url;
+    alert('Presigned GET placed in the input');
   }catch(e){ alert('Error requesting GET presign: '+e.message); }
 }
+
 document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
-// initial demo files (will be replaced by backend fetch if logged in)
-files = [ { key:'images/test.jpg', name:'images/test.jpg', size:24567 }, { key:'docs/report.pdf', name:'docs/report.pdf', size:120345 } ];
+// ---------- View / Search / List-Grid ----------
+document.querySelectorAll('.nav-item').forEach(el=>{
+  el.addEventListener('click', (ev)=>{
+    ev.preventDefault();
+    document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
+    el.classList.add('active');
+    view = el.getAttribute('data-view');
+    renderFiles();
+  });
+});
+// mark default active
+const defaultEl = document.querySelector('.nav-item[data-view="all"]'); if(defaultEl) defaultEl.classList.add('active');
+
+document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
+document.getElementById('search').addEventListener('keydown', e=>{ if(e.key==='Enter') renderFiles(); });
+
+document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderMode='list'; });
+document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderMode='grid'; });
+
+// quick upload link focuses file input
+document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
+
+// ---------- Initial render ----------
 renderFiles();
+updateCounts();
 
 </script>
 </body>
