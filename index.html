@@ -1,96 +1,204 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>S3 Demo Upload</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>S3 Drive-style Demo</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 40px;
-      background: #f7f7f7;
-    }
-    h2 {
-      color: #333;
-    }
-    input[type="file"] {
-      margin-bottom: 15px;
-    }
-    input[type="text"] {
-      width: 500px;
-      padding: 10px;
-      margin-bottom: 10px;
-      border: 2px solid #ccc;
-      border-radius: 5px;
-      font-size: 14px;
-    }
-    button {
-      padding: 10px 20px;
-      background: #0078ff;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-      margin-top: 5px;
-    }
-    button:hover {
-      background: #005fcc;
-    }
-    .section {
-      margin-bottom: 40px;
-      background: white;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-    }
+    body { background:#f1f3f4; font-family: "Segoe UI", Roboto, Arial, sans-serif; }
+    .topbar { height:64px; background:white; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display:flex; align-items:center; padding:0 20px; }
+    .sidebar { width:240px; min-height: calc(100vh - 64px); background: white; padding-top:16px; box-shadow: 1px 0 0 rgba(0,0,0,0.04); }
+    .sidebar a { display:block; padding:12px 18px; color:#333; text-decoration:none; border-radius:6px; margin:4px 8px; }
+    .sidebar a:hover { background:#f5f7f9; text-decoration:none; }
+    .main { padding:24px; }
+    .card-drive { border-radius:12px; padding:18px; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .file-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:16px; margin-top:16px; }
+    .file-tile { background:#fff; border-radius:8px; padding:12px; text-align:center; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+    .file-list { margin-top:16px; }
+    .logo-snap { height:42px; margin-right:12px; border-radius:6px; }
+    .search-input { width:420px; max-width:60vw; }
+    .btn-primary { background:#1a73e8; border:0; }
   </style>
 </head>
 <body>
 
-  <div class="section">
-    <h2>S3 Upload using Presigned URL</h2>
+  <!-- Topbar -->
+  <div class="topbar d-flex align-items-center">
+    <img src="/mnt/data/fd9632f3-674f-43d7-8244-9007743e1f57.png" alt="logo" class="logo-snap" onerror="this.style.display='none'">
+    <h5 class="mb-0 me-auto">S3 Drive Demo</h5>
 
-    <input type="file" id="fileInput" /><br/>
-
-    <input id="putUrl" placeholder="Paste presigned PUT URL" /><br/>
-
-    <button id="uploadBtn">Upload File</button>
+    <input id="searchInput" class="form-control search-input me-3" placeholder="Search files..." />
+    <button class="btn btn-outline-secondary me-2" onclick="alert('Search is demo-only')">Search</button>
+    <div class="btn-group">
+      <button class="btn btn-secondary">Sign in</button>
+    </div>
   </div>
 
-  <div class="section">
-    <h3>Download</h3>
+  <div class="d-flex">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <a href="#" class="fw-bold">My Drive</a>
+      <a href="#">Shared with me</a>
+      <a href="#">Recent</a>
+      <a href="#">Starred</a>
+      <a href="#">Trash</a>
+      <hr>
+      <a href="#" id="btnUploadQuick" class="text-primary">+ New (Upload)</a>
+    </div>
 
-    <input id="getUrl" placeholder="Paste presigned GET URL" /><br/>
+    <!-- Main -->
+    <div class="main flex-grow-1">
+      <!-- Upload card -->
+      <div class="card-drive">
+        <div class="d-flex align-items-center">
+          <div>
+            <h4 class="mb-1">S3 Upload using Presigned URL</h4>
+            <small class="text-muted">Generate a presigned PUT URL locally (Java app), paste it below, and upload directly to S3.</small>
+          </div>
+        </div>
 
-    <button id="downloadBtn">Download File</button>
+        <div class="mt-3">
+          <div class="row g-3 align-items-center">
+            <div class="col-md-4">
+              <input type="file" id="fileInput" class="form-control" />
+            </div>
+            <div class="col-md-6">
+              <input type="text" id="putUrl" class="form-control" placeholder="Paste presigned PUT URL" />
+            </div>
+            <div class="col-md-2 d-grid">
+              <button class="btn btn-primary" id="uploadBtn">Upload File</button>
+            </div>
+          </div>
+
+          <div class="mt-3 text-muted small">Tip: use your Java app to generate presigned PUT/GET URLs and paste them here.</div>
+        </div>
+      </div>
+
+      <!-- Files area -->
+      <div class="card-drive mt-4">
+        <div class="d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">Files</h5>
+          <div>
+            <button class="btn btn-sm btn-outline-secondary me-2" onclick="viewList()">List</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="viewGrid()">Grid</button>
+          </div>
+        </div>
+
+        <!-- Grid view -->
+        <div id="gridView" class="file-grid" style="display:none;">
+          <!-- sample tiles -->
+          <div class="file-tile"> <div class="fs-4">📄</div> <div class="mt-2">report.pdf</div> </div>
+          <div class="file-tile"> <div class="fs-4">🖼️</div> <div class="mt-2">photo.jpg</div> </div>
+          <div class="file-tile"> <div class="fs-4">📁</div> <div class="mt-2">folder/</div> </div>
+        </div>
+
+        <!-- List view -->
+        <div id="listView" class="file-list">
+          <table class="table table-borderless">
+            <thead class="text-muted small">
+              <tr><th>Name</th><th>Size</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="filesTableBody">
+              <!-- populated by JS -->
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+
+      <!-- Download card -->
+      <div class="card-drive mt-4">
+        <h5>Download using Presigned GET URL</h5>
+        <div class="row g-3 mt-2">
+          <div class="col-md-9">
+            <input type="text" id="getUrl" class="form-control" placeholder="Paste presigned GET URL" />
+          </div>
+          <div class="col-md-3 d-grid">
+            <button class="btn btn-primary" id="downloadBtn">Download File</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
   </div>
 
-  <script>
-    document.getElementById("uploadBtn").onclick = async () => {
-      const file = document.getElementById("fileInput").files[0];
-      const url = document.getElementById("putUrl").value.trim();
+<script>
+  // demo file list (replace with dynamic S3 list if you want)
+  const demoFiles = [
+    {name: 'images/test.jpg', size: '24 KB'},
+    {name: 'docs/report.pdf', size: '120 KB'}
+  ];
 
-      if (!file) return alert("Please choose a file.");
-      if (!url) return alert("Please paste a presigned PUT URL.");
+  function renderList(){
+    const tbody = document.getElementById('filesTableBody');
+    tbody.innerHTML = '';
+    demoFiles.forEach(f => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${f.name}</td><td>${f.size}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary" onclick="copyGetUrl('${f.name}')">Get URL</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteFile('${f.name}')">Delete</button>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  renderList();
+  function viewGrid(){ document.getElementById('gridView').style.display='grid'; document.getElementById('listView').style.display='none'; }
+  function viewList(){ document.getElementById('gridView').style.display='none'; document.getElementById('listView').style.display='block'; }
 
-      try {
-        const res = await fetch(url, {
-          method: "PUT",
-          body: file
-        });
+  // upload and download handlers (same logic you used earlier)
+  document.getElementById('uploadBtn').addEventListener('click', async () => {
+    const file = document.getElementById('fileInput').files[0];
+    const url = document.getElementById('putUrl').value.trim();
+    if (!file || !url) return alert('Select a file and paste a presigned PUT URL.');
 
-        if (res.ok) alert("Upload successful!");
-        else alert("Upload failed: " + res.status);
-      } catch (e) {
-        alert("Error: " + e);
+    try {
+      const resp = await fetch(url, { method:'PUT', body: file });
+      if (resp.ok) {
+        alert('Upload successful!');
+        // optionally add to demoFiles
+        demoFiles.unshift({name: url.split('?')[0].split('/').slice(-2).join('/'), size: file.size + ' bytes'});
+        renderList();
+      } else {
+        alert('Upload failed: ' + resp.status);
       }
-    };
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  });
 
-    document.getElementById("downloadBtn").onclick = () => {
-      const url = document.getElementById("getUrl").value.trim();
-      if (!url) return alert("Paste a presigned GET URL.");
-      window.open(url, "_blank");
-    };
-  </script>
+  document.getElementById('downloadBtn').addEventListener('click', () => {
+    const url = document.getElementById('getUrl').value.trim();
+    if (!url) return alert('Paste a presigned GET URL.');
+    window.open(url, '_blank');
+  });
+
+  function copyGetUrl(key){
+    // in a real app this would request a presigned GET for the key
+    const sample = prompt('Paste the presigned GET URL for: ' + key + '\n(Use your Java app to generate it)');
+    if (sample) {
+      document.getElementById('getUrl').value = sample;
+    }
+  }
+
+  function deleteFile(key){
+    if (!confirm('Delete ' + key + ' locally?')) return;
+    // in real app call S3 delete or presigned DELETE
+    const idx = demoFiles.findIndex(d=>d.name===key);
+    if (idx>=0) demoFiles.splice(idx,1);
+    renderList();
+  }
+
+  // quick upload link
+  document.getElementById('btnUploadQuick').addEventListener('click', () => {
+    document.getElementById('fileInput').scrollIntoView({behavior:'smooth'});
+    document.getElementById('fileInput').focus();
+  });
+</script>
 
 </body>
 </html>
