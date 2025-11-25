@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>S3 Demo Upload</title>
+</head>
+<body>
+  <h2>S3 Upload using Presigned URL</h2>
+
+  <input type="file" id="fileInput"/><br/><br/>
+  <input id="putUrl" size="80" placeholder="Paste presigned PUT URL"/><br/>
+  <button id="uploadBtn">Upload</button>
+
+  <h3>Download</h3>
+  <input id="getUrl" size="80" placeholder="Paste presigned GET URL"/><br/>
+  <button id="downloadBtn">Download</button>
+
+  <script>
+    document.getElementById("uploadBtn").onclick = async () => {
+      const file = document.getElementById("fileInput").files[0];
+      const url = document.getElementById("putUrl").value;
+      if (!file || !url) return alert("File or URL missing!");
+
+      try {
+        const res = await fetch(url, { method: "PUT", body: file });
+        alert(res.ok ? "Upload OK!" : "Upload failed: " + res.status);
+      } catch (e) {
+        alert("Error: " + e);
+      }
+    };
+
+    document.getElementById("downloadBtn").onclick = () => {
+      const url = document.getElementById("getUrl").value;
+      if (!url) return alert("Enter URL!");
+      window.open(url, "_blank");
+    };
+  </script>
+</body>
+</html>
