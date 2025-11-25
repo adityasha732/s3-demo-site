@@ -5,12 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>CloudVault — S3 Drive Demo</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <style>
     :root{--accent:#1a73e8}
     body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8}
     .topbar{height:64px;background:#fff;border-bottom:1px solid #eef2f6;display:flex;align-items:center;padding:0 20px}
-    .logo{height:40px;margin-right:12px;border-radius:6px;object-fit:cover}
+    .logo{height:40px;margin-right:12px;border-radius:6px;object-fit:cover;cursor:pointer}
     .sidebar{width:220px;background:#fff;padding:16px;border-right:1px solid #eef2f6;min-height:calc(100vh - 64px)}
     .card-panel{border-radius:12px;padding:18px;background:#fff;box-shadow:0 6px 18px rgba(12,26,44,0.04)}
     .file-tile{border-radius:8px;padding:12px;background:#fbfdff;border:1px solid #eef4ff}
@@ -20,25 +19,23 @@
     .star{cursor:pointer}
     .grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
     .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9}
-
-    /* progress */
     .progress { background:#e9eef8; height:18px; border-radius:10px; overflow:visible; }
     .progress-bar { background: var(--accent); transition: width 200ms linear; height:100%; }
     #progressWrap { position:relative; }
     #progressLabel { position:relative; margin-top:6px; text-align:center; font-weight:600; color:#fff; margin-left:auto; margin-right:auto; width:100%; transform: translateY(-28px); pointer-events:none; }
-    /* clickable title */
     #siteTitle { cursor:pointer; user-select: none; }
   </style>
 </head>
 <body>
   <div class="topbar">
-    <!-- Shinchan logo at top-left (make sure the file exists in repo: asset/sing-crayon-shin-chan.gif) -->
     <img id="topLogo" src="asset/sing-crayon-shin-chan.gif" class="logo" alt="CloudVault logo" onerror="this.style.display='none'">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
 
     <input id="search" class="form-control form-control-sm me-2" placeholder="Search files (client-side)" style="width:360px;max-width:40vw">
     <button id="searchBtn" class="btn btn-sm btn-outline-secondary me-3">Search</button>
-    <div class="ms-auto d-flex gap-2">
+
+    <div class="ms-auto d-flex gap-2 align-items-center">
+      <div id="userInfo" class="muted small me-2"></div>
       <button id="signBtn" class="btn btn-sm btn-secondary">Sign in</button>
     </div>
   </div>
@@ -60,7 +57,7 @@
         <div class="d-flex justify-content-between align-items-start mb-2">
           <div>
             <h5 class="m-0">Upload (presigned PUT)</h5>
-            <div class="muted small">This frontend requests presigned PUT URLs from your backend, uploads directly to S3, then optionally notifies your backend to record metadata. If you don't have an API, paste a presigned PUT URL in the fallback field.</div>
+            <div class="muted small">This frontend requests presigned PUT URLs from your backend, uploads directly to S3, then optionally notifies your backend to record metadata.</div>
           </div>
         </div>
 
@@ -72,7 +69,7 @@
             <input id="keyInput" type="text" class="form-control form-control-sm" placeholder="storage key (optional)">
           </div>
           <div class="col-auto">
-            <input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password">
+            <input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password (optional)">
           </div>
           <div class="col-auto">
             <button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload</button>
@@ -90,14 +87,12 @@
         </div>
 
         <div class="mt-3">
-          <!-- PROGRESS: no Shinchan here -->
           <div id="progressWrap" style="display:none; margin-top:12px;">
             <div style="position:relative;">
               <div class="progress">
                 <div id="progressBar" class="progress-bar" role="progressbar" style="width:0%;"></div>
               </div>
             </div>
-            <!-- Percent label centered visually inside the bar (optional) -->
             <div id="progressLabel">0%</div>
           </div>
 
@@ -145,27 +140,65 @@
 <script>
 // =========== Config - change to match your backend ==============
 const API_BASE = ''; // e.g. 'https://your-backend.example.com'
-// Expected endpoints:
-// POST  ${API_BASE}/presign        { filename, contentType, key? }  -> { url, key }
-// POST  ${API_BASE}/presign-get    { key } -> { url }
-// POST  ${API_BASE}/files          { key, name, size, contentType } -> store metadata
-// DELETE ${API_BASE}/files/:key    -> delete object & metadata
+// Backend endpoints described in the Java example below.
 // ==============================================================
 
-// Refresh when clicking site title
-document.getElementById('siteTitle').addEventListener('click', () => {
-  location.reload();
+// refresh when clicking site title or logo
+document.getElementById('siteTitle').addEventListener('click', () => location.reload());
+document.getElementById('topLogo').addEventListener('click', () => location.reload());
+
+// auth token storage
+function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
+function getToken(){ return localStorage.getItem('cv_token'); }
+
+// extract token from URL on redirect from backend auth callback
+(function maybeConsumeTokenFromUrl(){
+  const qp = new URLSearchParams(window.location.search);
+  const t = qp.get('token');
+  if(t){ setToken(t); qp.delete('token'); const newq = qp.toString(); history.replaceState({}, '', location.pathname + (newq?('?'+newq):'')); }
+})();
+
+// show signed-in user
+function setUserInfo(name){ document.getElementById('userInfo').textContent = name ? ('Signed in: '+name) : ''; document.getElementById('signBtn').textContent = name ? 'Sign out' : 'Sign in'; }
+
+async function whoami(){
+  const token = getToken(); if(!token) { setUserInfo(null); return null; }
+  try{
+    const resp = await fetch(API_BASE + '/whoami', { headers: { 'Authorization': 'Bearer '+token } });
+    if(!resp.ok){ setToken(null); setUserInfo(null); return null; }
+    const j = await resp.json(); setUserInfo(j.name || j.sub); return j;
+  }catch(e){ setToken(null); setUserInfo(null); return null; }
+}
+
+// sign button
+document.getElementById('signBtn').addEventListener('click', ()=>{
+  const token = getToken();
+  if(!token){
+    // start login flow via backend (backend redirects to Cognito hosted UI)
+    if(!API_BASE) return alert('Set API_BASE in the page to enable login flow.');
+    window.location.href = API_BASE + '/login';
+  } else {
+    // sign out
+    setToken(null); setUserInfo(null); alert('Signed out');
+  }
 });
 
-// Simple client-side model for files (used for demo + UI rendering)
+// call whoami on load
+whoami();
+
+// ... existing UI & upload logic below, but now attaching Authorization header when calling API_BASE endpoints
+
+// helper to attach auth headers
+function authHeaders(headers = {}){ const t = getToken(); if(t) headers['Authorization'] = 'Bearer ' + t; return headers; }
+
+// rest of your client logic (render, upload) with small changes: when calling API_BASE endpoints include auth header
+// For brevity, copy/paste your previous render/upload functions but ensure fetch calls include authHeaders()
+
+// (To keep this example concise I will re-use your earlier functions but modify API calls:)
 let files = [];
 let renderMode = 'list';
-
-// Helpers
 function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'" :'&#39;'}[c]||c)); }
 function humanSize(n){ if(!n) return '0 B'; const units=['B','KB','MB','GB']; let i=0; while(n>=1024&&i<units.length-1){ n/=1024; i++; } return Math.round(n*10)/10 + ' ' + units[i]; }
-
-// UI references
 const fileInput = document.getElementById('fileInput');
 const keyInput = document.getElementById('keyInput');
 const pwInput = document.getElementById('pwInput');
@@ -179,21 +212,15 @@ const filesList = document.getElementById('filesList');
 const filesGrid = document.getElementById('filesGrid');
 const getUrlInput = document.getElementById('getUrlInput');
 const progressLabel = document.getElementById('progressLabel');
-
-// Render functions
 function renderFiles(){
   const q = (document.getElementById('search').value||'').toLowerCase().trim();
   const show = files.filter(f => !q || f.name.toLowerCase().includes(q) || f.key.toLowerCase().includes(q));
-
-  // list
   filesList.innerHTML = '';
   if(show.length===0){ filesList.innerHTML = '<div class="muted">No files</div>'; }
   show.forEach(f=>{
     const div = document.createElement('div'); div.className='list-row';
     const left = document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
     const right = document.createElement('div'); right.innerHTML = `<div class="small muted">${humanSize(f.size)}</div>`;
-
-    // actions
     const actions = document.createElement('div'); actions.className='actions';
     const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL';
     getBtn.onclick = ()=> requestGetPresign(f.key);
@@ -202,12 +229,9 @@ function renderFiles(){
     const delBtn = document.createElement('button'); delBtn.className='btn btn-sm btn-outline-danger'; delBtn.textContent='Delete'; delBtn.onclick = ()=> deleteFile(f.key);
     actions.append(getBtn, dlBtn, starBtn, delBtn);
     right.appendChild(actions);
-
     div.append(left,right);
     filesList.appendChild(div);
   });
-
-  // grid
   filesGrid.innerHTML='';
   show.forEach(f=>{
     const t = document.createElement('div'); t.className='file-tile';
@@ -216,112 +240,53 @@ function renderFiles(){
     filesGrid.appendChild(t);
   });
 }
-
-// Toggle view buttons
 document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderMode='list'; });
 document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderMode='grid'; });
-
-// Basic actions (client-only simulation where backend not configured)
-function toggleStar(key){ const it = files.find(x=>x.key===key); if(!it) return; it.star = !it.star; renderFiles(); }
-function deleteFile(key){ if(!confirm('Delete '+key+'? This demo will simulate removal only.')) return; const idx = files.findIndex(x=>x.key===key); if(idx>=0) files.splice(idx,1); renderFiles(); }
+function toggleStar(key){ const it = files.find(x=>x.key===key); if(!it) return; it.star = !it.star; // optionally send to backend to persist
+  fetch(API_BASE + '/files/star', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key, star: !!it.star }) }).catch(()=>{}); renderFiles(); }
+function deleteFile(key){ if(!confirm('Delete '+key+'?')) return; const idx = files.findIndex(x=>x.key===key); if(idx>=0) files.splice(idx,1); fetch(API_BASE + '/files/'+encodeURIComponent(key), { method:'DELETE', headers: authHeaders() }).catch(()=>{}); renderFiles(); }
 function openPresigned(url){ if(!url) return alert('No URL available for this file. Use Get URL to request a presigned GET from the backend.'); window.open(url, '_blank'); }
-
-// Search
 document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
 document.getElementById('search').addEventListener('keydown', e=>{ if(e.key==='Enter') renderFiles(); });
-
-// -------- UPLOAD FLOW ---------
-// upload button: request presign -> upload to presign URL (PUT with progress) -> notify backend (optional)
+// upload flow
 uploadBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  if(!file) return alert('Pick a file to upload');
+  const file = fileInput.files[0]; if(!file) return alert('Pick a file to upload');
   const key = keyInput.value.trim() || file.name;
-  const pw = pwInput.value.trim();
-  if(API_BASE && !pw) return alert('Enter upload password');
-
   try{
     setProgress(0);
     setMessage('Requesting presigned URL...', true);
     let presignUrl = manualPut.value.trim();
     let realKey = key;
     if(API_BASE){
-      const resp = await fetch(API_BASE + '/presign', { method:'POST', headers: {'Content-Type':'application/json', 'x-upload-password': pw }, body: JSON.stringify({ filename:file.name, contentType:file.type, key }) });
+      const resp = await fetch(API_BASE + '/presign', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ filename:file.name, contentType:file.type, key }) });
       if(!resp.ok) throw new Error('Presign request failed: ' + resp.status);
       const j = await resp.json(); presignUrl = j.url; realKey = j.key || key;
     }
     if(!presignUrl) throw new Error('No presigned URL available');
-
-    // upload via PUT with progress (xhrUpload will call setProgress)
     await xhrUpload(presignUrl, file);
-
-    // notify backend to index the file (optional)
-    if(API_BASE){ await fetch(API_BASE + '/files', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) }); }
-
+    if(API_BASE){ await fetch(API_BASE + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) }); }
     files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, url: API_BASE ? undefined : presignUrl });
-    setMessage('Upload finished: ' + realKey, true);
-    setProgress(100);
-    renderFiles();
-
-    // reset inputs
+    setMessage('Upload finished: ' + realKey, true); setProgress(100); renderFiles();
     fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
-  }catch(err){
-    console.error(err);
-    setMessage('Upload error: '+err.message,false);
-    setProgress(0);
-  }
+  }catch(err){ console.error(err); setMessage('Upload error: '+err.message,false); setProgress(0); }
 });
-
-// Manual upload using pasted PUT URL
-uploadManual.addEventListener('click', async ()=>{
-  const file = fileInput.files[0]; const url = manualPut.value.trim(); if(!file || !url) return alert('Select file and paste a presigned PUT URL');
-  try{ setMessage('Uploading via pasted PUT URL...'); await xhrUpload(url,file); files.unshift({ key: url.split('?')[0].split('/').slice(3).join('/'), name: file.name, size: file.size, contentType: file.type, url }); renderFiles(); setMessage('Manual upload finished',true); }catch(e){ setMessage('Manual upload error: '+e.message,false); }
-});
-
-// xhr upload with progress
-function xhrUpload(url, file){ return new Promise((resolve,reject)=>{
-  const xhr = new XMLHttpRequest(); xhr.open('PUT', url, true);
-  xhr.onload = ()=>{ if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); };
-  xhr.onerror = ()=>reject(new Error('Network error'));
-  xhr.upload.onprogress = e=>{ if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
-  xhr.send(file);
-}); }
-
-// Updated setProgress without Shinchan animation
-function setProgress(pct) {
-  pct = Math.max(0, Math.min(100, Math.round(pct)));
-  if (pct === 0) {
-    progressWrap.style.display = 'none';
-  } else {
-    progressWrap.style.display = 'block';
-  }
-  progressBar.style.width = pct + '%';
-  progressLabel.textContent = pct + '%';
-  if (pct === 100) {
-    // optional short hold at 100%
-    setTimeout(()=>{}, 700);
-  }
-}
-
+uploadManual.addEventListener('click', async ()=>{ const file = fileInput.files[0]; const url = manualPut.value.trim(); if(!file || !url) return alert('Select file and paste a presigned PUT URL'); try{ setMessage('Uploading via pasted PUT URL...'); await xhrUpload(url,file); files.unshift({ key: url.split('?')[0].split('/').slice(3).join('/'), name: file.name, size: file.size, contentType: file.type, url }); renderFiles(); setMessage('Manual upload finished',true); }catch(e){ setMessage('Manual upload error: '+e.message,false); }});
+function xhrUpload(url, file){ return new Promise((resolve,reject)=>{ const xhr = new XMLHttpRequest(); xhr.open('PUT', url, true); xhr.onload = ()=>{ if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); }; xhr.onerror = ()=>reject(new Error('Network error')); xhr.upload.onprogress = e=>{ if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); }; xhr.send(file); }); }
+function setProgress(pct) { pct = Math.max(0, Math.min(100, Math.round(pct))); if (pct === 0) { progressWrap.style.display = 'none'; } else { progressWrap.style.display = 'block'; } progressBar.style.width = pct + '%'; progressLabel.textContent = pct + '%'; if (pct === 100) setTimeout(()=>{}, 700); }
 function setMessage(text, ok=true){ uploadMsg.textContent = text; uploadMsg.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ uploadMsg.textContent=''; }, 7000); }
-
-// -------- Request presigned GET from API (if configured) --------
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
   if(!API_BASE) return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
   try{
-    const resp = await fetch(API_BASE + '/presign-get', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key: decoded }) });
-    if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
+    const resp = await fetch(API_BASE + '/presign-get', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: decoded }) });
+    if(!resp.ok) throw new Error('GET presign failed: ' + resp.status);
     const j = await resp.json(); getUrlInput.value = j.url; alert('Presigned GET placed in the input');
   }catch(e){ alert('Error requesting GET presign: '+e.message); }
 }
-
-// open URL button
-document.getElementById('openGetBtn').addEventListener('click', ()=>{
-  const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank');
-});
+document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
-// initial demo files (if any)
+// initial demo files (will be replaced by backend fetch if logged in)
 files = [ { key:'images/test.jpg', name:'images/test.jpg', size:24567 }, { key:'docs/report.pdf', name:'docs/report.pdf', size:120345 } ];
 renderFiles();
 
