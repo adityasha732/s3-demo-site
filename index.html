@@ -166,7 +166,8 @@
   - Set API_BASE to your backend URL to enable full integration.
   - Demo mode uses localStorage key 'cv_files' to persist file metadata locally.
 */
-const API_BASE = ''; // e.g. 'https://your-backend.example.com' (leave empty to run demo-local)
+const API_BASE = 'http://localhost:8080';
+ // e.g. 'https://your-backend.example.com' (leave empty to run demo-local)
 
 // ---------- Auth helpers (very small) ----------
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
