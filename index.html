@@ -34,8 +34,24 @@
 </head>
 <body>
   <div class="topbar">
-    <!-- using uploaded file path as the logo source -->
-    <img id="topLogo" src="/mnt/data/cfc48cb5-7ecd-4cb4-9ea7-2764acdde733.png" class="logo" alt="CloudVault logo" onerror="this.style.display='none'">
+    <!-- logo: try repo asset first, then local backend static, then uploaded file path; hide if none works -->
+    <img id="topLogo"
+         src="asset/sing-crayon-shin-chan.gif"
+         data-attempt="0"
+         class="logo"
+         alt="CloudVault logo"
+         onerror="
+           if(this.dataset.attempt==='0'){
+             this.dataset.attempt='1';
+             this.src='http://localhost:8080/logo.gif';
+           } else if(this.dataset.attempt==='1'){
+             this.dataset.attempt='2';
+             this.src='/mnt/data/cfc48cb5-7ecd-4cb4-9ea7-2764acdde733.png';
+           } else {
+             this.style.display='none';
+           }
+         ">
+
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
 
     <input id="search" class="form-control form-control-sm me-2" placeholder="Search files (client-side)" style="width:360px;max-width:40vw">
