@@ -59,7 +59,7 @@
 
     <div class="ms-auto d-flex gap-2 align-items-center">
       <div id="userInfo" class="muted small me-2"></div>
-      <button id="signBtn" class="btn btn-sm btn-secondary">Sign in</button>
+      <!-- Sign button removed as requested -->
     </div>
   </div>
 
@@ -173,12 +173,7 @@ const API_BASE = 'http://localhost:8080';
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
 function getToken(){ return localStorage.getItem('cv_token'); }
 function authHeaders(h={}){ const t=getToken(); if(t) h['Authorization']='Bearer '+t; return h; }
-document.getElementById('signBtn').addEventListener('click', ()=>{
-  if(!getToken()){
-    if(!API_BASE) { alert('No backend configured — demo mode.'); return; }
-    window.location.href = API_BASE + '/login';
-  } else { setToken(null); alert('Signed out'); updateUserInfo(); }
-});
+// Sign button removed — we keep updateUserInfo so UI can still show signed state if desired
 function updateUserInfo(){ document.getElementById('userInfo').textContent = getToken() ? 'Signed in' : ''; }
 updateUserInfo();
 
@@ -287,6 +282,7 @@ function renderFiles(){
     left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
     const right = document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
     const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size) + (f.modified?(' • '+formatDate(f.modified)):'');
+
     const actions = document.createElement('div'); actions.className='actions';
 
     const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL';
