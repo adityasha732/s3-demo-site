@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CloudVault — S3 Drive Demo</title>
+  <title>CloudVault — S3 Drive (Cognito frontend)</title>
 
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
@@ -34,32 +34,12 @@
 </head>
 <body>
   <div class="topbar">
-    <!-- logo: try repo asset first, then local backend static, then uploaded file path; hide if none works -->
-    <img id="topLogo"
-         src="asset/sing-crayon-shin-chan.gif"
-         data-attempt="0"
-         class="logo"
-         alt="CloudVault logo"
-         onerror="
-           if(this.dataset.attempt==='0'){
-             this.dataset.attempt='1';
-             this.src='http://localhost:8080/logo.gif';
-           } else if(this.dataset.attempt==='1'){
-             this.dataset.attempt='2';
-             this.src='/mnt/data/cfc48cb5-7ecd-4cb4-9ea7-2764acdde733.png';
-           } else {
-             this.style.display='none';
-           }
-         ">
-
+    <img id="topLogo" src="asset/sing-crayon-shin-chan.gif" class="logo" alt="CloudVault logo" onerror="this.style.display='none'">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
-
     <input id="search" class="form-control form-control-sm me-2" placeholder="Search files (client-side)" style="width:360px;max-width:40vw">
     <button id="searchBtn" class="btn btn-sm btn-outline-secondary me-3">Search</button>
-
     <div class="ms-auto d-flex gap-2 align-items-center">
       <div id="userInfo" class="muted small me-2"></div>
-      <!-- Sign button removed as requested -->
     </div>
   </div>
 
@@ -75,12 +55,11 @@
     </aside>
 
     <main class="flex-grow-1 p-4">
-      <!-- Upload Panel -->
       <div class="card-panel">
         <div class="d-flex justify-content-between align-items-start mb-2">
           <div>
-            <h5 class="m-0">Upload (presigned PUT)</h5>
-            <div class="muted small">This frontend requests presigned PUT URLs from your backend, uploads directly to S3, then optionally notifies your backend to record metadata.</div>
+            <h5 class="m-0">Upload (Cognito → S3)</h5>
+            <div class="muted small">This frontend uses Amazon Cognito Identity Pool to get temporary credentials and uploads directly to S3.</div>
           </div>
         </div>
 
@@ -92,29 +71,20 @@
             <input id="keyInput" type="text" class="form-control form-control-sm" placeholder="storage key (optional)">
           </div>
           <div class="col-auto">
-            <input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password (optional)">
+            <label class="small"><input id="otpToggle" type="checkbox"> Use OTP prefix</label>
+          </div>
+          <div class="col-auto">
+            <label class="small"><input id="encryptToggle" type="checkbox"> Encrypt with OTP</label>
           </div>
           <div class="col-auto">
             <button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload</button>
           </div>
         </div>
 
-        <div class="row g-2 mt-3">
-          <div class="col-md-8">
-            <input id="manualPut" class="form-control form-control-sm" placeholder="(Fallback) paste presigned PUT URL here">
-            <div class="muted small mt-1">If you have a Java app that generates a presigned PUT URL, paste it here and click "Upload using PUT".</div>
-          </div>
-          <div class="col-md-4 d-grid">
-            <button id="uploadManual" class="btn btn-outline-secondary btn-sm">Upload using pasted PUT URL</button>
-          </div>
-        </div>
-
         <div class="mt-3">
           <div id="progressWrap" style="display:none; margin-top:12px;">
-            <div style="position:relative;">
-              <div class="progress">
-                <div id="progressBar" class="progress-bar" role="progressbar" style="width:0%;"></div>
-              </div>
+            <div class="progress">
+              <div id="progressBar" class="progress-bar" role="progressbar" style="width:0%;"></div>
             </div>
             <div id="progressLabel">0%</div>
           </div>
@@ -123,7 +93,6 @@
         </div>
       </div>
 
-      <!-- Files Panel -->
       <div class="card-panel mt-4">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <h5 class="m-0">Files</h5>
@@ -142,57 +111,85 @@
         </div>
       </div>
 
-      <!-- Download Panel -->
       <div class="card-panel mt-4">
         <h6 class="m-0">Download / Get Presigned GET</h6>
         <div class="row g-2 mt-2">
           <div class="col-md-8">
-            <input id="getUrlInput" class="form-control form-control-sm" placeholder="Paste presigned GET URL (or the output will be placed here)">
+            <input id="getUrlInput" class="form-control form-control-sm" placeholder="Presigned GET appears here">
           </div>
           <div class="col-md-4 d-grid">
             <button id="openGetBtn" class="btn btn-sm btn-primary">Open URL</button>
-            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary mt-2">Request Presigned GET from API</button>
+            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary mt-2">Get Presigned GET</button>
           </div>
         </div>
-        <div class="muted small mt-2">If your backend implements /presign-get, it will return a presigned GET for a requested key.</div>
+        <div class="muted small mt-2">Presigned GETs are generated in the browser using your Cognito temporary credentials.</div>
       </div>
 
     </main>
   </div>
 
-<script>
-/*
-  CloudVault demo front-end
-  - Set API_BASE to your backend URL to enable full integration.
-  - Demo mode uses localStorage key 'cv_files' to persist file metadata locally.
-*/
-const API_BASE = 'http://localhost:8080';
- // e.g. 'https://your-backend.example.com' (leave empty to run demo-local)
+<script type="module">
+/* ================== CONFIG (edit only if different) ================== */
+const IDENTITY_POOL_ID = "ap-south-1:a1c00d3f-80ab-4b77-a42d-f44f5493ee0a";
+const BUCKET = "my-storage-project";
+const REGION = "ap-south-1";
+/* =================================================================== */
 
-// ---------- Auth helpers (very small) ----------
-function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
-function getToken(){ return localStorage.getItem('cv_token'); }
-function authHeaders(h={}){ const t=getToken(); if(t) h['Authorization']='Bearer '+t; return h; }
-// Sign button removed — we keep updateUserInfo so UI can still show signed state if desired
-function updateUserInfo(){ document.getElementById('userInfo').textContent = getToken() ? 'Signed in' : ''; }
-updateUserInfo();
+/* ---------- AWS SDK imports (ESM via unpkg) ---------- */
+import { fromCognitoIdentityPool } from "https://unpkg.com/@aws-sdk/credential-provider-cognito-identity?module";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "https://unpkg.com/@aws-sdk/client-s3?module";
+import { getSignedUrl } from "https://unpkg.com/@aws-sdk/s3-request-presigner?module";
 
-// refresh when clicking title/logo
-document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
-document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
+/* ---------- Build S3 client using Cognito Identity Pool ---------- */
+const s3Client = new S3Client({
+  region: REGION,
+  credentials: fromCognitoIdentityPool({
+    clientConfig: { region: REGION },
+    identityPoolId: IDENTITY_POOL_ID,
+  }),
+});
 
-// ---------- State ----------
-let files = []; // array of { key, name, size, contentType, modified (ms), star, deleted (bool), url }
-let view = 'all'; // all | recent | starred | trash
-let renderMode = 'list'; // list | grid
+/* ---------- Helpers ---------- */
+function nowMs(){ return Date.now(); }
+function generateOtp(len=6){ return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0"); }
+function s3KeyFor(otp, name){ return `otp/${otp}/${name}`; }
+function humanSize(n){ if(!n && n!==0) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
+function formatDate(ms){ const d=new Date(ms); return d.toLocaleString(); }
 
-// DOM refs
+/* ---------- WebCrypto AES-GCM helpers (OTP-derived key) ---------- */
+async function deriveKeyFromOtp(otp){
+  const enc = new TextEncoder();
+  const pw = await crypto.subtle.importKey("raw", enc.encode(otp), {name:"PBKDF2"}, false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name:"PBKDF2", salt: enc.encode("cloudvault-demo-salt"), iterations: 100000, hash: "SHA-256" }, pw, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+}
+async function encryptFileBlob(file, otp){
+  const key = await deriveKeyFromOtp(otp);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ab = await file.arrayBuffer();
+  const ct = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, ab);
+  const combined = new Uint8Array(iv.byteLength + ct.byteLength);
+  combined.set(iv,0);
+  combined.set(new Uint8Array(ct), iv.byteLength);
+  return new Blob([combined], { type: "application/octet-stream" });
+}
+async function decryptArrayBuffer(ivPlusCipher, otp){
+  const key = await deriveKeyFromOtp(otp);
+  const data = new Uint8Array(ivPlusCipher);
+  const iv = data.slice(0,12);
+  const cipher = data.slice(12);
+  const plain = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, cipher);
+  return plain;
+}
+
+/* ---------- UI state & refs ---------- */
+let files = []; // local metadata cache
+const STORE_KEY = 'cv_files_v1';
+
 const fileInput = document.getElementById('fileInput');
 const keyInput = document.getElementById('keyInput');
-const pwInput = document.getElementById('pwInput');
+const otpToggle = document.getElementById('otpToggle');
+const encryptToggle = document.getElementById('encryptToggle');
 const uploadBtn = document.getElementById('uploadBtn');
-const uploadManual = document.getElementById('uploadManual');
-const manualPut = document.getElementById('manualPut');
 const uploadMsg = document.getElementById('uploadMsg');
 const progressWrap = document.getElementById('progressWrap');
 const progressBar = document.getElementById('progressBar');
@@ -201,54 +198,18 @@ const filesList = document.getElementById('filesList');
 const filesGrid = document.getElementById('filesGrid');
 const getUrlInput = document.getElementById('getUrlInput');
 
-// ---------- Persistence (demo mode) ----------
-const STORE_KEY = 'cv_files_v1';
-function saveLocalFiles(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
-function loadLocalFiles(){ const raw = localStorage.getItem(STORE_KEY); if(!raw) return false; try{ files = JSON.parse(raw); return true; }catch(e){ return false; } }
+/* ---------- persistence ---------- */
+function saveLocal(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
+function loadLocal(){ const r=localStorage.getItem(STORE_KEY); if(!r) return false; try{ files = JSON.parse(r); return true; }catch(e){return false;} }
 
-// ---------- Utility ----------
-function nowMs(){ return Date.now(); }
-function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
-function humanSize(n){ if(!n && n!==0) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
-function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
-
-// ---------- Demo seed (if no backend and no saved data) ----------
-function seedDemoIfNeeded(){
-  if(API_BASE) return;
-  if(loadLocalFiles()) return;
-  files = [
-    { key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false },
-    { key:'docs/report.pdf', name:'docs/report.pdf', size:120345, modified:nowMs()-86400000*10, star:true, deleted:false },
-    { key:'images/text4.jpg', name:'istockphoto-1363516705-612x612.jpg', size:6678, modified:nowMs()-3600000, star:false, deleted:false }
-  ];
-  saveLocalFiles();
-}
+/* ---------- seed/demo fallback ---------- */
+function seedDemoIfNeeded(){ if(loadLocal()) return; files = []; saveLocal(); }
 seedDemoIfNeeded();
 
-// ---------- Fetch files from backend (if configured) ----------
-async function fetchFilesFromBackend(){
-  if(!API_BASE) return false;
-  try{
-    const resp = await fetch(API_BASE + '/files', { headers: authHeaders() });
-    if(!resp.ok) throw new Error('Fetch files failed: '+resp.status);
-    const j = await resp.json();
-    // backend should return array of objects with at least key,name,size,modified,star,deleted
-    files = j.map(x => ({ key:x.key, name:x.name || x.key.split('/').slice(-1).join('/'), size:x.size || 0, modified:x.modified || nowMs(), star:!!x.star, deleted:!!x.deleted, url:x.url }));
-    saveLocalFiles();
-    return true;
-  }catch(e){
-    console.warn('Could not fetch files from backend:', e);
-    return false;
-  }
-}
-
-// attempt backend fetch on load (if available), fall back to local
-(async ()=>{ if(API_BASE) await fetchFilesFromBackend(); renderFiles(); updateCounts(); })();
-
-// ---------- Render / Filtering ----------
+/* ---------- render ---------- */
 function updateCounts(){
   const all = files.filter(f=>!f.deleted).length;
-  const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
+  const recent = files.filter(f=>!f.deleted && (nowMs()-(f.modified||0) <= 1000*60*60*24*30)).length;
   const star = files.filter(f=>!f.deleted && f.star).length;
   const trash = files.filter(f=>f.deleted).length;
   document.getElementById('countAll').textContent = all ? ' ('+all+')' : '';
@@ -257,276 +218,146 @@ function updateCounts(){
   document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : '';
 }
 
-function getFilteredFiles(){
-  const q = (document.getElementById('search').value || '').toLowerCase().trim();
-  let list = files.slice(); // clone
-  if(view==='recent') list = list.filter(f=>!f.deleted && ((nowMs()- (f.modified||0)) <= 1000*60*60*24*30)); // 30 days
-  if(view==='starred') list = list.filter(f=>!f.deleted && f.star);
-  if(view==='trash') list = list.filter(f=>f.deleted);
-  if(view==='all') list = list.filter(f=>!f.deleted);
-  if(q) list = list.filter(f => (f.name||'').toLowerCase().includes(q) || (f.key||'').toLowerCase().includes(q));
-  // sort: by modified desc
-  list.sort((a,b)=> (b.modified||0) - (a.modified||0));
-  return list;
-}
-
 function renderFiles(){
-  const list = getFilteredFiles();
+  const list = files.slice().filter(f=>!f.deleted).sort((a,b)=>(b.modified||0)-(a.modified||0));
   filesList.innerHTML = '';
-  if(list.length===0){
-    filesList.innerHTML = '<div class="muted">No files</div>';
-  }
+  if(list.length===0) filesList.innerHTML = '<div class="muted">No files</div>';
   list.forEach(f=>{
-    const div = document.createElement('div'); div.className='list-row';
-    const left = document.createElement('div');
-    left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
-    const right = document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
-    const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size) + (f.modified?(' • '+formatDate(f.modified)):'');
-
-    const actions = document.createElement('div'); actions.className='actions';
-
-    const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL';
+    const div=document.createElement('div'); div.className='list-row';
+    const left=document.createElement('div'); left.innerHTML = `<div><strong>${f.name}</strong><div class="muted small">${f.key}</div></div>`;
+    const right=document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
+    const meta=document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size)+' • '+formatDate(f.modified||0);
+    const getBtn=document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary'; getBtn.textContent='Get URL';
     getBtn.onclick = ()=> requestGetPresign(f.key);
-
-    const openBtn = document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary me-1'; openBtn.textContent='Open';
-    openBtn.onclick = ()=> openPresigned(f.url, f.key);
-
-    const starBtn = document.createElement('button'); starBtn.className='btn btn-sm ' + (f.star ? 'btn-warning' : 'btn-outline-warning') + ' me-1'; starBtn.textContent = f.star ? '★' : '☆';
-    starBtn.onclick = ()=> toggleStar(f.key);
-
-    const delBtn = document.createElement('button'); delBtn.className='btn btn-sm ' + (view==='trash' ? 'btn-danger' : 'btn-outline-danger');
-    delBtn.textContent = view==='trash' ? 'Delete Permanently' : 'Delete';
-    delBtn.onclick = ()=> { if(view==='trash') permanentlyDelete(f.key); else moveToTrash(f.key); };
-
-    const restoreBtn = document.createElement('button'); restoreBtn.className='btn btn-sm btn-outline-success me-1'; restoreBtn.textContent='Restore';
-    restoreBtn.onclick = ()=> restoreFromTrash(f.key);
-
-    actions.appendChild(getBtn);
-    if(!f.deleted) actions.appendChild(openBtn);
-    if(f.deleted){
-      actions.appendChild(restoreBtn);
-      actions.appendChild(delBtn);
-    } else {
-      actions.appendChild(starBtn);
-      actions.appendChild(delBtn);
-    }
-
-    right.appendChild(meta);
-    right.appendChild(actions);
-
-    div.appendChild(left);
-    div.appendChild(right);
-    filesList.appendChild(div);
+    const openBtn=document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary'; openBtn.textContent='Open';
+    openBtn.onclick = ()=> { if(f.url) window.open(f.url,'_blank'); else requestGetPresign(f.key).then(()=> window.open(getUrlInput.value,'_blank')); };
+    right.appendChild(meta); right.appendChild(getBtn); right.appendChild(openBtn);
+    div.appendChild(left); div.appendChild(right); filesList.appendChild(div);
   });
 
-  // grid
   filesGrid.innerHTML = '';
   list.forEach(f=>{
-    const t = document.createElement('div'); t.className='file-tile';
-    t.innerHTML = `<div style="font-size:26px">${guessEmojiForName(f.name)}</div>
-      <div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div>
-      <div class="muted small">${humanSize(f.size)}</div>
-      <div class="mt-2">
-        <button class="btn btn-sm btn-outline-primary me-1">Get URL</button>
-        ${f.deleted ? '<button class="btn btn-sm btn-outline-success me-1">Restore</button>' : '<button class="btn btn-sm btn-outline-secondary me-1">Open</button>'}
-      </div>`;
-    // Attach events for the dynamic buttons:
+    const t=document.createElement('div'); t.className='file-tile';
+    t.innerHTML = `<div style="font-size:26px">${guessEmojiForName(f.name)}</div><div style="margin-top:8px"><strong>${f.name}</strong></div><div class="muted small">${humanSize(f.size)}</div>`;
     const btns = t.querySelectorAll('button');
-    if(btns[0]) btns[0].onclick = ()=> requestGetPresign(f.key);
-    if(f.deleted){
-      if(btns[1]) btns[1].onclick = ()=> restoreFromTrash(f.key);
-    } else {
-      if(btns[1]) btns[1].onclick = ()=> openPresigned(f.url, f.key);
-    }
     filesGrid.appendChild(t);
   });
 
   updateCounts();
 }
+function guessEmojiForName(name){ const n=(name||'').toLowerCase(); if(n.endsWith('.jpg')||n.endsWith('.png')||n.endsWith('.gif')) return '🖼️'; if(n.endsWith('.pdf')) return '📄'; if(n.endsWith('.zip')) return '🗜️'; return '📁'; }
 
-// small heuristic for icon
-function guessEmojiForName(name){
-  const n = (name||'').toLowerCase();
-  if(n.endsWith('.jpg')||n.endsWith('.png')||n.endsWith('.gif')) return '🖼️';
-  if(n.endsWith('.pdf')) return '📄';
-  if(n.endsWith('.zip')||n.endsWith('.tar')||n.endsWith('.gz')) return '🗜️';
-  return '📁';
-}
+/* ---------- helpers for UI progress/messages ---------- */
+function setProgress(pct){ pct=Math.max(0,Math.min(100,Math.round(pct))); if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block'; progressBar.style.width = pct + '%'; progressLabel.textContent = pct + '%'; if(pct===100) setTimeout(()=>{},700); }
+function setMessage(msg, ok=true){ uploadMsg.textContent = msg; uploadMsg.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ uploadMsg.textContent=''; }, 7000); }
 
-// ---------- Actions ----------
-function toggleStar(key){
-  const it = files.find(x=>x.key===key);
-  if(!it) return;
-  it.star = !it.star;
-  // persist to backend if available
-  if(API_BASE){
-    fetch(API_BASE + '/files/star', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key, star: !!it.star }) }).catch(()=>{});
-  }
-  saveLocalFiles();
-  renderFiles();
-}
-
-function moveToTrash(key){
-  if(!confirm('Move to Trash?')) return;
-  const it = files.find(x=>x.key===key);
-  if(!it) return;
-  it.deleted = true;
-  it.modified = nowMs();
-  if(API_BASE){
-    fetch(API_BASE + '/files/trash', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key }) }).catch(()=>{});
-  }
-  saveLocalFiles();
-  renderFiles();
-}
-
-function restoreFromTrash(key){
-  const it = files.find(x=>x.key===key);
-  if(!it) return;
-  it.deleted = false;
-  it.modified = nowMs();
-  if(API_BASE){
-    fetch(API_BASE + '/files/restore', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key }) }).catch(()=>{});
-  }
-  saveLocalFiles();
-  renderFiles();
-}
-
-function permanentlyDelete(key){
-  if(!confirm('Permanently delete? This cannot be undone.')) return;
-  const idx = files.findIndex(x=>x.key===key);
-  if(idx===-1) return;
-  files.splice(idx,1);
-  if(API_BASE){
-    fetch(API_BASE + '/files/'+encodeURIComponent(key), { method:'DELETE', headers: authHeaders() }).catch(()=>{});
-  }
-  saveLocalFiles();
-  renderFiles();
-}
-
-function openPresigned(url, key){
-  if(url){
-    window.open(url, '_blank'); return;
-  }
-  if(!API_BASE) { alert('No API configured: cannot open. Use Get URL to get a presigned GET for ' + key); return; }
-  // fallback: ask backend for presigned get
-  requestGetPresign(encodeURIComponent(key));
-}
-
-// ---------- Upload flows ----------
+/* ---------- Upload flow (Cognito + S3) ---------- */
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
-  if(!file) return alert('Pick a file to upload');
-  const keyVal = keyInput.value.trim() || file.name;
+  if(!file) return alert('Choose a file to upload');
+
+  setProgress(0);
+  setMessage('Preparing upload...', true);
+
+  // determine final key
+  const useOtp = otpToggle.checked;
+  const wantEncrypt = encryptToggle.checked;
+  let otp;
+  if(useOtp) otp = generateOtp(6);
+
+  // key input optional; if provided use it as full key (no OTP prefixed)
+  let requestedKey = keyInput.value.trim();
+  let finalKey;
+  if(requestedKey){
+    finalKey = requestedKey;
+  } else if(useOtp){
+    finalKey = s3KeyFor(otp, file.name + (wantEncrypt ? '.enc' : ''));
+  } else {
+    finalKey = file.name;
+  }
+
   try{
-    setProgress(0);
-    setMessage('Requesting presigned URL...', true);
-    let presignUrl = manualPut.value.trim();
-    let realKey = keyVal;
-    if(API_BASE){
-      const resp = await fetch(API_BASE + '/presign', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ filename:file.name, contentType:file.type, key: keyVal }) });
-      if(!resp.ok) throw new Error('Presign request failed: ' + resp.status);
-      const j = await resp.json();
-      presignUrl = j.url; realKey = j.key || keyVal;
+    // possibly encrypt in-browser
+    let bodyToUpload = file;
+    let contentType = file.type || 'application/octet-stream';
+    if(wantEncrypt){
+      if(!useOtp){
+        // encryption key must be OTP-derived — require OTP if encrypt chosen
+        otp = generateOtp(6);
+      }
+      bodyToUpload = await encryptFileBlob(file, otp);
+      contentType = 'application/octet-stream';
+      // if no explicit key provided, append .enc
+      if(!requestedKey && !finalKey.endsWith('.enc')) finalKey = finalKey + '.enc';
     }
-    if(!presignUrl) throw new Error('No presigned URL available');
-    await xhrUpload(presignUrl, file);
-    // notify backend to register metadata
-    if(API_BASE){
-      await fetch(API_BASE + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) });
+
+    setMessage('Uploading to S3...', true);
+
+    // Upload to S3 using PutObjectCommand
+    const putCmd = new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: finalKey,
+      Body: bodyToUpload,
+      ContentType: contentType
+    });
+
+    // track progress via multipart? Browser SDK doesn't provide upload progress via send()
+    // We'll use fetch + presigned URL if you need progress; here we use direct SDK send (no progress).
+    await s3Client.send(putCmd);
+
+    // generate presigned GET for immediate download convenience
+    let presignedUrl;
+    try {
+      presignedUrl = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: finalKey }), { expiresIn: 60 * 10 });
+    } catch(e){
+      console.warn('Presign GET failed', e);
     }
-    files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
-    saveLocalFiles();
-    setMessage('Upload finished: ' + realKey, true);
+
+    // Add to local files metadata
+    files.unshift({ key: finalKey, name: finalKey.split('/').slice(-1)[0], size: bodyToUpload.size || file.size, contentType, modified: nowMs(), star:false, deleted:false, url: presignedUrl });
+
+    saveLocal();
+    setMessage('Upload complete — key: ' + finalKey, true);
     setProgress(100);
     renderFiles();
-    fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
-  }catch(err){ console.error(err); setMessage('Upload error: '+(err.message||err), false); setProgress(0); }
+
+    // show OTP to user if generated
+    if(useOtp) alert('Upload complete. OTP: ' + otp + '\nKey: ' + finalKey);
+    else if(wantEncrypt) alert('Upload complete. File encrypted with an OTP (copy the OTP displayed above)');
+
+    // clear inputs
+    fileInput.value=''; keyInput.value=''; otpToggle.checked=false; encryptToggle.checked=false;
+  } catch(err){
+    console.error(err);
+    setMessage('Upload failed: ' + (err.message || err), false);
+    setProgress(0);
+  }
 });
 
-uploadManual.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  const url = manualPut.value.trim();
-  if(!file || !url) return alert('Select file and paste a presigned PUT URL');
-  try{
-    setMessage('Uploading via pasted PUT URL...');
-    await xhrUpload(url, file);
-    const derivedKey = url.split('?')[0].split('/').slice(3).join('/') || file.name;
-    files.unshift({ key: derivedKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url });
-    saveLocalFiles();
-    renderFiles();
-    setMessage('Manual upload finished', true);
-  }catch(e){ setMessage('Manual upload error: '+e.message, false); }
-});
-
-function xhrUpload(url, file){
-  return new Promise((resolve,reject)=>{
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', url, true);
-    xhr.onload = ()=> { if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); };
-    xhr.onerror = ()=> reject(new Error('Network error'));
-    xhr.upload.onprogress = e=> { if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
-    xhr.send(file);
-  });
-}
-
-function setProgress(pct){
-  pct = Math.max(0, Math.min(100, Math.round(pct)));
-  if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block';
-  progressBar.style.width = pct + '%';
-  progressLabel.textContent = pct + '%';
-  if(pct===100) setTimeout(()=>{ /* hide later if desired */ }, 700);
-}
-
-function setMessage(text, ok=true){
-  uploadMsg.textContent = text;
-  uploadMsg.style.color = ok ? 'green' : 'crimson';
-  setTimeout(()=>{ uploadMsg.textContent=''; }, 7000);
-}
-
-// ---------- Presign GET request ----------
+/* ---------- Presigned GET generation (browser) ---------- */
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
-  if(!API_BASE) {
-    // demo: if file has url stored, use that
-    const f = files.find(x=>x.key===decoded);
-    if(f && f.url) { getUrlInput.value = f.url; alert('Presigned GET placed in the input'); return; }
-    return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
-  }
   try{
-    const resp = await fetch(API_BASE + '/presign-get', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: decoded }) });
-    if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
-    const j = await resp.json();
-    getUrlInput.value = j.url;
-    alert('Presigned GET placed in the input');
-  }catch(e){ alert('Error requesting GET presign: '+e.message); }
+    const presigned = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: decoded }), { expiresIn: 60 * 10 });
+    getUrlInput.value = presigned;
+    alert('Presigned GET placed in the input (valid 10 min)');
+    return presigned;
+  } catch(e){
+    console.error(e);
+    alert('Error generating presigned GET: ' + (e.message || e));
+    return null;
+  }
 }
 
-document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
-document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
+/* ---------- UI bindings for list/grid and get button ---------- */
+document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u=getUrlInput.value.trim(); if(!u) return alert('Paste presigned GET URL'); window.open(u,'_blank'); });
+document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. otp/123456/file.ext):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
-// ---------- View / Search / List-Grid ----------
-document.querySelectorAll('.nav-item').forEach(el=>{
-  el.addEventListener('click', (ev)=>{
-    ev.preventDefault();
-    document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
-    el.classList.add('active');
-    view = el.getAttribute('data-view');
-    renderFiles();
-  });
-});
-// mark default active
-const defaultEl = document.querySelector('.nav-item[data-view="all"]'); if(defaultEl) defaultEl.classList.add('active');
+document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; });
+document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; });
 
-document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
-document.getElementById('search').addEventListener('keydown', e=>{ if(e.key==='Enter') renderFiles(); });
+document.getElementById('quickUpload').addEventListener('click',(e)=>{ e.preventDefault(); fileInput.click(); });
 
-document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderMode='list'; });
-document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderMode='grid'; });
-
-// quick upload link focuses file input
-document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
-
-// ---------- Initial render ----------
 renderFiles();
 updateCounts();
 
