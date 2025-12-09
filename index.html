@@ -20,16 +20,13 @@
     .progress-bar { background: var(--accent); transition: width 200ms linear; height:100%; }
     #progressWrap { position:relative; }
     #progressLabel { position:relative; margin-top:6px; text-align:center; font-weight:600; color:#fff; margin-left:auto; margin-right:auto; width:100%; transform: translateY(-28px); pointer-events:none; }
-    #siteTitle { cursor:pointer; user-select: none; }
+    #siteTitle { cursor:pointer; user-select: none; } /* clickable title */
     .meta-muted { color:#94a3b8; font-size:.85rem; }
-    .otp-box { display:flex; gap:8px; align-items:center; }
-    .otp-input { width:180px; }
   </style>
 </head>
 <body>
   <div class="topbar">
-    <!-- logo (click to refresh) -->
-    <img id="topLogo" src="" class="logo" alt="CloudVault logo" style="display:inline-block;width:40px;height:40px;background:#e6eefc;border-radius:6px;">
+    <img id="topLogo" src="" class="logo" alt="CloudVault logo" style="display:none">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
     <div class="ms-auto d-flex gap-2 align-items-center">
       <div id="userInfo" class="muted small me-2"></div>
@@ -43,16 +40,6 @@
       <hr>
       <div class="mt-2"><small class="muted">Recipient email (change if needed):</small>
         <input id="recipientEmail" class="form-control form-control-sm mt-1" value="shaaditya87@gmail.com">
-      </div>
-
-      <hr>
-      <div class="mt-2">
-        <small class="muted">Manual OTP (paste here to use for upload or decrypt):</small>
-        <div class="otp-box mt-1">
-          <input id="manualOtp" class="form-control form-control-sm otp-input" placeholder="Enter OTP (optional)">
-          <button id="useOtpBtn" class="btn btn-sm btn-outline-secondary">Apply</button>
-        </div>
-        <div class="muted small mt-1">If you paste an OTP here before uploading, that OTP will be used as the prefix. Use this also to decrypt downloads.</div>
       </div>
     </aside>
 
@@ -70,6 +57,10 @@
           </div>
           <div class="col-auto">
             <label class="small"><input id="otpToggle" type="checkbox"> Use OTP prefix</label>
+          </div>
+          <!-- NEW: Manual OTP input -->
+          <div class="col-auto">
+            <input id="otpInput" type="text" maxlength="6" class="form-control form-control-sm" placeholder="Enter OTP (optional)">
           </div>
           <div class="col-auto">
             <label class="small"><input id="encryptToggle" type="checkbox"> Encrypt with OTP</label>
@@ -96,14 +87,21 @@
       <div class="card-panel mt-4">
         <h6 class="m-0">Download / Presigned GET</h6>
         <div class="row g-2 mt-2">
-          <div class="col-md-6"><input id="getUrlInput" class="form-control form-control-sm" placeholder="Presigned GET appears here"></div>
-          <div class="col-md-6 d-flex gap-2">
+          <div class="col-md-8">
+            <input id="getUrlInput" class="form-control form-control-sm" placeholder="Presigned GET appears here">
+          </div>
+          <div class="col-md-4 d-grid">
             <button id="openGetBtn" class="btn btn-sm btn-primary">Open URL</button>
-            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary">Generate GET (browser)</button>
-            <button id="downloadOtpBtn" class="btn btn-sm btn-warning">Download with OTP</button>
+            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary mt-2">Generate GET (browser)</button>
           </div>
         </div>
-        <div class="muted small mt-2">Use "Download with OTP" to fetch an encrypted .enc file and decrypt locally using the OTP you entered above.</div>
+
+        <!-- OPTIONAL: This OTP box can be reused mentally for download/decrypt flows -->
+        <div class="row g-2 mt-3">
+          <div class="col-md-6">
+            <input id="otpDownloadHint" class="form-control form-control-sm" placeholder="Use same OTP here when you implement download/decrypt">
+          </div>
+        </div>
       </div>
 
     </main>
@@ -136,14 +134,30 @@ const s3Client = new S3Client({
 function nowMs(){ return Date.now(); }
 function generateOtp(len=6){ return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0"); }
 function s3KeyFor(otp,name){ return `otp/${otp}/${name}`; }
-function setProgress(p){ p = Math.max(0,Math.min(100,Math.round(p))); document.getElementById('progressWrap').style.display = p===0 ? 'none' : 'block'; document.getElementById('progressBar').style.width = p + '%'; document.getElementById('progressLabel').textContent = p + '%'; }
-function setMessage(t,ok=true){ const e = document.getElementById('uploadMsg'); e.textContent=t; e.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ e.textContent=''; },7000); }
+function setProgress(p){
+  p = Math.max(0,Math.min(100,Math.round(p)));
+  document.getElementById('progressWrap').style.display = p===0 ? 'none' : 'block';
+  document.getElementById('progressBar').style.width = p + '%';
+  document.getElementById('progressLabel').textContent = p + '%';
+}
+function setMessage(t,ok=true){
+  const e = document.getElementById('uploadMsg');
+  e.textContent=t;
+  e.style.color = ok ? 'green' : 'crimson';
+  setTimeout(()=>{ e.textContent=''; },7000);
+}
 
 /* WebCrypto derived key helpers (AES-GCM) */
 async function deriveKeyFromOtp(otp){
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey("raw", enc.encode(otp), { name:"PBKDF2" }, false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name:"PBKDF2", salt: enc.encode("cloudvault-demo-salt"), iterations:100000, hash:"SHA-256" }, base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+  return crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt: enc.encode("cloudvault-demo-salt"), iterations:100000, hash:"SHA-256" },
+    base,
+    { name:"AES-GCM", length:256 },
+    false,
+    ["encrypt","decrypt"]
+  );
 }
 async function encryptBlobWithOtp(blob, otp){
   const key = await deriveKeyFromOtp(otp);
@@ -175,44 +189,63 @@ async function emailOtpToRecipient(backendBase, email, otp, key){
     const j = await resp.json();
     if(resp.ok) return { ok:true, json:j };
     return { ok:false, json:j };
-  } catch(e){ console.error('send-otp error',e); return { ok:false, error:e }; }
+  } catch(e){
+    console.error('send-otp error',e);
+    return { ok:false, error:e };
+  }
 }
 
 /* UI state + persistence (local only) */
 let files = [];
 const STORE_KEY = 'cv_files_v1';
 function saveLocal(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); renderFiles(); }
-function loadLocal(){ const r = localStorage.getItem(STORE_KEY); if(!r) return false; try{ files = JSON.parse(r); return true; }catch(e){return false;} }
+function loadLocal(){
+  const r = localStorage.getItem(STORE_KEY);
+  if(!r) return false;
+  try{
+    files = JSON.parse(r);
+    return true;
+  }catch(e){return false;}
+}
 loadLocal();
 
 /* Render */
 function renderFiles(){
   const listArea = document.getElementById('filesList');
   listArea.innerHTML = '';
-  if(files.length===0) { listArea.innerHTML = '<div class="muted">No files</div>'; return; }
+  if(files.length===0) {
+    listArea.innerHTML = '<div class="muted">No files</div>';
+    return;
+  }
   for(const f of files){
-    const div = document.createElement('div'); div.className='list-row';
+    const div = document.createElement('div');
+    div.className='list-row';
     div.innerHTML = `<div><strong>${f.name}</strong><div class="muted small">${f.key}</div></div>`;
-    const right = document.createElement('div'); right.style.display='flex'; right.style.gap='8px';
-    const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary'; getBtn.textContent='Get URL';
-    getBtn.onclick = ()=> requestGetPresign(f.key).then(url=>{ if(url) { document.getElementById('getUrlInput').value = url; alert('Presigned URL placed in input'); }});
-    const openBtn = document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary'; openBtn.textContent='Open';
-    openBtn.onclick = ()=> { if(f.url) window.open(f.url,'_blank'); else requestGetPresign(f.key).then(url=>window.open(url,'_blank')); };
-    right.appendChild(getBtn); right.appendChild(openBtn);
-    div.appendChild(right); listArea.appendChild(div);
+    const right = document.createElement('div');
+    right.style.display='flex';
+    right.style.gap='8px';
+    const getBtn = document.createElement('button');
+    getBtn.className='btn btn-sm btn-outline-primary';
+    getBtn.textContent='Get URL';
+    getBtn.onclick = ()=> requestGetPresign(f.key).then(url=>{
+      if(url) {
+        document.getElementById('getUrlInput').value = url;
+        alert('Presigned URL placed in input');
+      }
+    });
+    const openBtn = document.createElement('button');
+    openBtn.className='btn btn-sm btn-outline-secondary';
+    openBtn.textContent='Open';
+    openBtn.onclick = ()=> {
+      if(f.url) window.open(f.url,'_blank');
+      else requestGetPresign(f.key).then(url=>window.open(url,'_blank'));
+    };
+    right.appendChild(getBtn);
+    right.appendChild(openBtn);
+    div.appendChild(right);
+    listArea.appendChild(div);
   }
 }
-
-/* Page refresh on clicking logo or title */
-document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
-document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
-
-/* Manual OTP apply button */
-document.getElementById('useOtpBtn').addEventListener('click', ()=>{
-  const v = (document.getElementById('manualOtp').value || '').trim();
-  if(!v) return alert('Enter an OTP to apply');
-  alert('Manual OTP set: ' + v + '\nThis OTP will be used for next upload (if Use OTP prefix checked) or downloads.');
-});
 
 /* Upload handler */
 document.getElementById('uploadBtn').addEventListener('click', async ()=>{
@@ -223,56 +256,81 @@ document.getElementById('uploadBtn').addEventListener('click', async ()=>{
   const useOtp = document.getElementById('otpToggle').checked;
   const wantEncrypt = document.getElementById('encryptToggle').checked;
   const recipientEmail = (document.getElementById('recipientEmail').value || '').trim();
+  const otpInput = (document.getElementById('otpInput').value || '').trim(); // NEW
 
-  // if user typed a manual OTP, use it; otherwise generate if needed
-  const manualOtpVal = (document.getElementById('manualOtp').value || '').trim();
   let otp = null;
-  if(manualOtpVal) otp = manualOtpVal;
-  else if(useOtp) otp = generateOtp(6);
-  else if(wantEncrypt) otp = generateOtp(6);
+  // NEW: if user typed OTP, use that; otherwise auto-generate
+  if(useOtp){
+    otp = otpInput || generateOtp(6);
+  } else if(wantEncrypt){
+    otp = otpInput || generateOtp(6); // encryption also needs OTP
+  }
 
   // determine key
   let finalKey;
   if(requestedKey) finalKey = requestedKey;
-  else if(useOtp || manualOtpVal) finalKey = s3KeyFor(otp, file.name + (wantEncrypt ? '.enc':'' ));
+  else if(useOtp) finalKey = s3KeyFor(otp, file.name + (wantEncrypt ? '.enc':'' ));
   else finalKey = file.name + (wantEncrypt ? '.enc' : '');
 
   try {
-    setProgress(0); setMessage('Preparing file...', true);
+    setProgress(0);
+    setMessage('Preparing file...', true);
 
     let bodyToUpload = file;
     let contentType = file.type || 'application/octet-stream';
     if(wantEncrypt){
-      if(!otp) otp = generateOtp(6); // ensure otp exists
       bodyToUpload = await encryptBlobWithOtp(file, otp);
       contentType = 'application/octet-stream';
-      if(!finalKey.endsWith('.enc')) finalKey = finalKey + '.enc';
     }
 
     setMessage('Uploading to S3...', true);
-    const putCmd = new PutObjectCommand({ Bucket: BUCKET, Key: finalKey, Body: bodyToUpload, ContentType: contentType });
+    // upload using AWS SDK PutObjectCommand
+    const putCmd = new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: finalKey,
+      Body: bodyToUpload,
+      ContentType: contentType
+    });
     await s3Client.send(putCmd);
 
+    // generate presigned GET for convenience
     let presigned = null;
-    try { presigned = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: finalKey }), { expiresIn: 60 * 10 }); } catch(e){ console.warn('presign-get failed', e); }
+    try {
+      presigned = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({ Bucket: BUCKET, Key: finalKey }),
+        { expiresIn: 60 * 10 }
+      );
+    } catch(e){
+      console.warn('presign-get failed', e);
+    }
 
-    files.unshift({ key: finalKey, name: finalKey.split('/').slice(-1)[0], size: bodyToUpload.size || file.size, contentType, modified: nowMs(), url: presigned });
+    // add to local files
+    files.unshift({
+      key: finalKey,
+      name: finalKey.split('/').slice(-1)[0],
+      size: bodyToUpload.size || file.size,
+      contentType,
+      modified: nowMs(),
+      url: presigned
+    });
     saveLocal();
     setProgress(100);
     setMessage('Upload complete: ' + finalKey, true);
 
-    // EMAIL OTP if generated and backend available
-    if(otp && !manualOtpVal){ // if OTP was generated by the page (not manual), email it
-      if(recipientEmail){
-        const r = await emailOtpToRecipient(BACKEND_BASE, recipientEmail, otp, finalKey);
-        if(r.ok) { alert('Upload complete — OTP emailed to ' + recipientEmail + '.'); }
-        else { console.warn('email OTP failed', r); alert('Upload complete. OTP: ' + otp + '\nBut email failed — copy the OTP and share manually.'); }
+    // EMAIL OTP if we generated one
+    if(otp){
+      if(!recipientEmail) {
+        alert('Upload complete. OTP: ' + otp + '\nNo recipient email configured; copy the OTP.');
       } else {
-        alert('Upload complete. OTP: ' + otp + '\nRecipient email not set.');
+        const r = await emailOtpToRecipient(BACKEND_BASE, recipientEmail, otp, finalKey);
+        if(r.ok) {
+          alert('Upload complete — OTP emailed to ' + recipientEmail + '.');
+        } else {
+          console.warn('email OTP failed', r);
+          alert('Upload complete. OTP: ' + otp + '\nBut email failed — copy the OTP and share manually.');
+        }
       }
-    } else if(otp && manualOtpVal){
-      // OTP was provided manually — just inform user
-      alert('Upload complete — used manual OTP: ' + otp);
     }
 
     // cleanup inputs
@@ -280,6 +338,7 @@ document.getElementById('uploadBtn').addEventListener('click', async ()=>{
     document.getElementById('keyInput').value = '';
     document.getElementById('otpToggle').checked = false;
     document.getElementById('encryptToggle').checked = false;
+    document.getElementById('otpInput').value = ''; // NEW: clear OTP input
 
     renderFiles();
   } catch(err){
@@ -293,49 +352,45 @@ document.getElementById('uploadBtn').addEventListener('click', async ()=>{
 /* Presigned GET (browser) */
 async function requestGetPresign(key){
   try {
-    const presigned = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn: 60 * 10 });
+    const presigned = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({ Bucket: BUCKET, Key: key }),
+      { expiresIn: 60 * 10 }
+    );
     return presigned;
-  } catch(e){ console.error('get presign failed', e); alert('Could not generate presigned GET: ' + e.message); return null; }
+  } catch(e){
+    console.error('get presign failed', e);
+    alert('Could not generate presigned GET: ' + e.message);
+    return null;
+  }
 }
 
-/* Download with OTP: fetch object, decrypt with OTP, trigger download */
-document.getElementById('downloadOtpBtn').addEventListener('click', async ()=>{
-  const key = prompt('Enter key to download & decrypt (e.g. otp/123456/file.enc):');
-  if(!key) return;
-  const otp = (document.getElementById('manualOtp').value || '').trim();
-  if(!otp) return alert('Please enter OTP in the box on the left before downloading.');
-
-  try {
-    setMessage('Getting presigned URL...', true);
-    const presigned = await requestGetPresign(key);
-    if(!presigned) return;
-    setMessage('Downloading encrypted file...', true);
-    const resp = await fetch(presigned);
-    if(!resp.ok) throw new Error('Download failed: ' + resp.status);
-    const ab = await resp.arrayBuffer();
-    setMessage('Decrypting...', true);
-    const plain = await decryptArrayBuffer(ab, otp);
-    const blob = new Blob([plain]);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    // remove .enc if present for filename
-    let filename = key.split('/').slice(-1)[0];
-    if(filename.endsWith('.enc')) filename = filename.slice(0, -4);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setMessage('Download & decrypt complete', true);
-  } catch(e){
-    console.error(e);
-    alert('Download/decrypt failed: ' + (e.message || e));
-    setMessage('Download/decrypt failed', false);
-  }
+/* open/get buttons */
+document.getElementById('openGetBtn').addEventListener('click', ()=>{
+  const u = document.getElementById('getUrlInput').value.trim();
+  if(!u) return alert('Paste presigned GET URL');
+  window.open(u,'_blank');
+});
+document.getElementById('reqGetBtn').addEventListener('click', async ()=>{
+  const k = prompt('Enter key to presign (e.g. otp/123456/file.ext):');
+  if(!k) return;
+  const url = await requestGetPresign(decodeURIComponent(k));
+  if(url) document.getElementById('getUrlInput').value = url;
 });
 
-/* open/get buttons */
-document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = document.getElementById('getUrlInput').value.trim(); if(!u) return alert('Paste presigned GET URL'); window.open(u,'_blank'); });
-document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. otp/123456/file.ext):'); if(!k) return; const url = await requestGetPresign(decodeURIComponent(k)); if(url) document.getElementById('getUrlInput').value = url; });
+/* NEW: Refresh page when clicking logo or "CloudVault" title */
+const siteTitleEl = document.getElementById('siteTitle');
+if(siteTitleEl){
+  siteTitleEl.addEventListener('click', () => {
+    window.location.reload();
+  });
+}
+const topLogoEl = document.getElementById('topLogo');
+if(topLogoEl){
+  topLogoEl.addEventListener('click', () => {
+    window.location.reload();
+  });
+}
 
 /* initial render */
 renderFiles();
