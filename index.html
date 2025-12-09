@@ -3,10 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CloudVault — S3 Drive (Cognito frontend)</title>
-
+  <title>CloudVault — S3 Drive (Cognito + Email OTP)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <style>
     :root { --accent:#1a73e8; --muted:#6b7280; }
     body { font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8; margin:0; }
@@ -14,11 +12,8 @@
     .logo{height:40px;margin-right:12px;border-radius:6px;object-fit:cover;cursor:pointer}
     .sidebar{width:220px;background:#fff;padding:16px;border-right:1px solid #eef2f6;min-height:calc(100vh - 64px)}
     .card-panel{border-radius:12px;padding:18px;background:#fff;box-shadow:0 6px 18px rgba(12,26,44,0.04)}
-    .file-tile{border-radius:8px;padding:12px;background:#fbfdff;border:1px solid #eef4ff}
     .muted{color:var(--muted)}
     .small{font-size:.9rem}
-    .actions button{margin-right:6px}
-    .star{cursor:pointer}
     .grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
     .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9}
     .progress { background:#e9eef8; height:18px; border-radius:10px; overflow:visible; }
@@ -26,18 +21,13 @@
     #progressWrap { position:relative; }
     #progressLabel { position:relative; margin-top:6px; text-align:center; font-weight:600; color:#fff; margin-left:auto; margin-right:auto; width:100%; transform: translateY(-28px); pointer-events:none; }
     #siteTitle { cursor:pointer; user-select: none; }
-    .nav-item { color:var(--muted); display:block; margin-bottom:6px; text-decoration:none; }
-    .nav-item.active { color:var(--accent); font-weight:700; }
     .meta-muted { color:#94a3b8; font-size:.85rem; }
-    .btn-outline-warning { color: #b45309; border-color:#fbbf24; }
   </style>
 </head>
 <body>
   <div class="topbar">
-    <img id="topLogo" src="asset/sing-crayon-shin-chan.gif" class="logo" alt="CloudVault logo" onerror="this.style.display='none'">
+    <img id="topLogo" src="" class="logo" alt="CloudVault logo" style="display:none">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
-    <input id="search" class="form-control form-control-sm me-2" placeholder="Search files (client-side)" style="width:360px;max-width:40vw">
-    <button id="searchBtn" class="btn btn-sm btn-outline-secondary me-3">Search</button>
     <div class="ms-auto d-flex gap-2 align-items-center">
       <div id="userInfo" class="muted small me-2"></div>
     </div>
@@ -46,26 +36,21 @@
   <div class="d-flex">
     <aside class="sidebar">
       <a href="#" class="d-block mb-2 fw-bold">My Drive</a>
-      <a href="#" class="nav-item" data-view="all">All files <span id="countAll" class="meta-muted"></span></a>
-      <a href="#" class="nav-item" data-view="recent">Recent <span id="countRecent" class="meta-muted"></span></a>
-      <a href="#" class="nav-item" data-view="starred">Starred <span id="countStar" class="meta-muted"></span></a>
-      <a href="#" class="nav-item" data-view="trash">Trash <span id="countTrash" class="meta-muted"></span></a>
+      <div class="muted small">Demo: Cognito (frontend) → S3 + Email OTP</div>
       <hr>
-      <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
+      <div class="mt-2"><small class="muted">Recipient email (change if needed):</small>
+        <input id="recipientEmail" class="form-control form-control-sm mt-1" value="shaaditya87@gmail.com">
+      </div>
     </aside>
 
     <main class="flex-grow-1 p-4">
       <div class="card-panel">
-        <div class="d-flex justify-content-between align-items-start mb-2">
-          <div>
-            <h5 class="m-0">Upload (Cognito → S3)</h5>
-            <div class="muted small">This frontend uses Amazon Cognito Identity Pool to get temporary credentials and uploads directly to S3.</div>
-          </div>
-        </div>
+        <h5 class="m-0">Upload (Cognito → S3 + Email OTP)</h5>
+        <div class="muted small">Select file, optionally use OTP prefix. After upload the OTP will be emailed to the recipient.</div>
 
         <div class="row g-2 align-items-center mt-3">
           <div class="col-auto">
-            <input id="fileInput" type="file" class="form-control form-control-sm">
+            <input id="fileInput" type="file" class="form-control form-control-sm" />
           </div>
           <div class="col-auto">
             <input id="keyInput" type="text" class="form-control form-control-sm" placeholder="storage key (optional)">
@@ -83,46 +68,27 @@
 
         <div class="mt-3">
           <div id="progressWrap" style="display:none; margin-top:12px;">
-            <div class="progress">
-              <div id="progressBar" class="progress-bar" role="progressbar" style="width:0%;"></div>
-            </div>
+            <div class="progress"><div id="progressBar" class="progress-bar" role="progressbar" style="width:0%;"></div></div>
             <div id="progressLabel">0%</div>
           </div>
-
           <div id="uploadMsg" class="small muted mt-2"></div>
         </div>
       </div>
 
       <div class="card-panel mt-4">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <h5 class="m-0">Files</h5>
-          <div>
-            <button id="listViewBtn" class="btn btn-sm btn-outline-secondary me-1">List</button>
-            <button id="gridViewBtn" class="btn btn-sm btn-outline-secondary">Grid</button>
-          </div>
-        </div>
-
-        <div id="listArea">
-          <div id="filesList"></div>
-        </div>
-
-        <div id="gridArea" style="display:none" class="mt-3">
-          <div id="filesGrid" class="grid-wrap"></div>
-        </div>
+        <h5 class="m-0">Files (local demo cache)</h5>
+        <div id="filesList" class="mt-3"></div>
       </div>
 
       <div class="card-panel mt-4">
-        <h6 class="m-0">Download / Get Presigned GET</h6>
+        <h6 class="m-0">Download / Presigned GET</h6>
         <div class="row g-2 mt-2">
-          <div class="col-md-8">
-            <input id="getUrlInput" class="form-control form-control-sm" placeholder="Presigned GET appears here">
-          </div>
+          <div class="col-md-8"><input id="getUrlInput" class="form-control form-control-sm" placeholder="Presigned GET appears here"></div>
           <div class="col-md-4 d-grid">
             <button id="openGetBtn" class="btn btn-sm btn-primary">Open URL</button>
-            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary mt-2">Get Presigned GET</button>
+            <button id="reqGetBtn" class="btn btn-sm btn-outline-secondary mt-2">Generate GET (browser)</button>
           </div>
         </div>
-        <div class="muted small mt-2">Presigned GETs are generated in the browser using your Cognito temporary credentials.</div>
       </div>
 
     </main>
@@ -133,42 +99,44 @@
 const IDENTITY_POOL_ID = "ap-south-1:a1c00d3f-80ab-4b77-a42d-f44f5493ee0a";
 const BUCKET = "my-storage-project";
 const REGION = "ap-south-1";
+/* Backend that will send OTP emails (local test) */
+const BACKEND_BASE = "http://localhost:3000"; // change to deployed URL when available
 /* =================================================================== */
 
-/* ---------- AWS SDK imports (ESM via unpkg) ---------- */
+/* AWS SDK imports (ESM) */
 import { fromCognitoIdentityPool } from "https://unpkg.com/@aws-sdk/credential-provider-cognito-identity?module";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "https://unpkg.com/@aws-sdk/client-s3?module";
 import { getSignedUrl } from "https://unpkg.com/@aws-sdk/s3-request-presigner?module";
 
-/* ---------- Build S3 client using Cognito Identity Pool ---------- */
+/* Build S3 client */
 const s3Client = new S3Client({
   region: REGION,
   credentials: fromCognitoIdentityPool({
     clientConfig: { region: REGION },
-    identityPoolId: IDENTITY_POOL_ID,
-  }),
+    identityPoolId: IDENTITY_POOL_ID
+  })
 });
 
-/* ---------- Helpers ---------- */
+/* Helpers */
 function nowMs(){ return Date.now(); }
 function generateOtp(len=6){ return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0"); }
-function s3KeyFor(otp, name){ return `otp/${otp}/${name}`; }
-function humanSize(n){ if(!n && n!==0) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
-function formatDate(ms){ const d=new Date(ms); return d.toLocaleString(); }
+function s3KeyFor(otp,name){ return `otp/${otp}/${name}`; }
+function setProgress(p){ p = Math.max(0,Math.min(100,Math.round(p))); document.getElementById('progressWrap').style.display = p===0 ? 'none' : 'block'; document.getElementById('progressBar').style.width = p + '%'; document.getElementById('progressLabel').textContent = p + '%'; }
+function setMessage(t,ok=true){ const e = document.getElementById('uploadMsg'); e.textContent=t; e.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ e.textContent=''; },7000); }
 
-/* ---------- WebCrypto AES-GCM helpers (OTP-derived key) ---------- */
+/* WebCrypto derived key helpers (AES-GCM) */
 async function deriveKeyFromOtp(otp){
   const enc = new TextEncoder();
-  const pw = await crypto.subtle.importKey("raw", enc.encode(otp), {name:"PBKDF2"}, false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name:"PBKDF2", salt: enc.encode("cloudvault-demo-salt"), iterations: 100000, hash: "SHA-256" }, pw, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+  const base = await crypto.subtle.importKey("raw", enc.encode(otp), { name:"PBKDF2" }, false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name:"PBKDF2", salt: enc.encode("cloudvault-demo-salt"), iterations:100000, hash:"SHA-256" }, base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
 }
-async function encryptFileBlob(file, otp){
+async function encryptBlobWithOtp(blob, otp){
   const key = await deriveKeyFromOtp(otp);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ab = await file.arrayBuffer();
+  const ab = await blob.arrayBuffer();
   const ct = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, ab);
   const combined = new Uint8Array(iv.byteLength + ct.byteLength);
-  combined.set(iv,0);
+  combined.set(iv, 0);
   combined.set(new Uint8Array(ct), iv.byteLength);
   return new Blob([combined], { type: "application/octet-stream" });
 }
@@ -181,185 +149,134 @@ async function decryptArrayBuffer(ivPlusCipher, otp){
   return plain;
 }
 
-/* ---------- UI state & refs ---------- */
-let files = []; // local metadata cache
+/* Email backend helper */
+async function emailOtpToRecipient(backendBase, email, otp, key){
+  try {
+    const resp = await fetch(backendBase + '/send-otp', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email, otp, key })
+    });
+    const j = await resp.json();
+    if(resp.ok) return { ok:true, json:j };
+    return { ok:false, json:j };
+  } catch(e){ console.error('send-otp error',e); return { ok:false, error:e }; }
+}
+
+/* UI state + persistence (local only) */
+let files = [];
 const STORE_KEY = 'cv_files_v1';
+function saveLocal(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); renderFiles(); }
+function loadLocal(){ const r = localStorage.getItem(STORE_KEY); if(!r) return false; try{ files = JSON.parse(r); return true; }catch(e){return false;} }
+loadLocal();
 
-const fileInput = document.getElementById('fileInput');
-const keyInput = document.getElementById('keyInput');
-const otpToggle = document.getElementById('otpToggle');
-const encryptToggle = document.getElementById('encryptToggle');
-const uploadBtn = document.getElementById('uploadBtn');
-const uploadMsg = document.getElementById('uploadMsg');
-const progressWrap = document.getElementById('progressWrap');
-const progressBar = document.getElementById('progressBar');
-const progressLabel = document.getElementById('progressLabel');
-const filesList = document.getElementById('filesList');
-const filesGrid = document.getElementById('filesGrid');
-const getUrlInput = document.getElementById('getUrlInput');
-
-/* ---------- persistence ---------- */
-function saveLocal(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
-function loadLocal(){ const r=localStorage.getItem(STORE_KEY); if(!r) return false; try{ files = JSON.parse(r); return true; }catch(e){return false;} }
-
-/* ---------- seed/demo fallback ---------- */
-function seedDemoIfNeeded(){ if(loadLocal()) return; files = []; saveLocal(); }
-seedDemoIfNeeded();
-
-/* ---------- render ---------- */
-function updateCounts(){
-  const all = files.filter(f=>!f.deleted).length;
-  const recent = files.filter(f=>!f.deleted && (nowMs()-(f.modified||0) <= 1000*60*60*24*30)).length;
-  const star = files.filter(f=>!f.deleted && f.star).length;
-  const trash = files.filter(f=>f.deleted).length;
-  document.getElementById('countAll').textContent = all ? ' ('+all+')' : '';
-  document.getElementById('countRecent').textContent = recent ? ' ('+recent+')' : '';
-  document.getElementById('countStar').textContent = star ? ' ('+star+')' : '';
-  document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : '';
-}
-
+/* Render */
 function renderFiles(){
-  const list = files.slice().filter(f=>!f.deleted).sort((a,b)=>(b.modified||0)-(a.modified||0));
-  filesList.innerHTML = '';
-  if(list.length===0) filesList.innerHTML = '<div class="muted">No files</div>';
-  list.forEach(f=>{
-    const div=document.createElement('div'); div.className='list-row';
-    const left=document.createElement('div'); left.innerHTML = `<div><strong>${f.name}</strong><div class="muted small">${f.key}</div></div>`;
-    const right=document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
-    const meta=document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size)+' • '+formatDate(f.modified||0);
-    const getBtn=document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary'; getBtn.textContent='Get URL';
-    getBtn.onclick = ()=> requestGetPresign(f.key);
-    const openBtn=document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary'; openBtn.textContent='Open';
-    openBtn.onclick = ()=> { if(f.url) window.open(f.url,'_blank'); else requestGetPresign(f.key).then(()=> window.open(getUrlInput.value,'_blank')); };
-    right.appendChild(meta); right.appendChild(getBtn); right.appendChild(openBtn);
-    div.appendChild(left); div.appendChild(right); filesList.appendChild(div);
-  });
-
-  filesGrid.innerHTML = '';
-  list.forEach(f=>{
-    const t=document.createElement('div'); t.className='file-tile';
-    t.innerHTML = `<div style="font-size:26px">${guessEmojiForName(f.name)}</div><div style="margin-top:8px"><strong>${f.name}</strong></div><div class="muted small">${humanSize(f.size)}</div>`;
-    const btns = t.querySelectorAll('button');
-    filesGrid.appendChild(t);
-  });
-
-  updateCounts();
-}
-function guessEmojiForName(name){ const n=(name||'').toLowerCase(); if(n.endsWith('.jpg')||n.endsWith('.png')||n.endsWith('.gif')) return '🖼️'; if(n.endsWith('.pdf')) return '📄'; if(n.endsWith('.zip')) return '🗜️'; return '📁'; }
-
-/* ---------- helpers for UI progress/messages ---------- */
-function setProgress(pct){ pct=Math.max(0,Math.min(100,Math.round(pct))); if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block'; progressBar.style.width = pct + '%'; progressLabel.textContent = pct + '%'; if(pct===100) setTimeout(()=>{},700); }
-function setMessage(msg, ok=true){ uploadMsg.textContent = msg; uploadMsg.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ uploadMsg.textContent=''; }, 7000); }
-
-/* ---------- Upload flow (Cognito + S3) ---------- */
-uploadBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  if(!file) return alert('Choose a file to upload');
-
-  setProgress(0);
-  setMessage('Preparing upload...', true);
-
-  // determine final key
-  const useOtp = otpToggle.checked;
-  const wantEncrypt = encryptToggle.checked;
-  let otp;
-  if(useOtp) otp = generateOtp(6);
-
-  // key input optional; if provided use it as full key (no OTP prefixed)
-  let requestedKey = keyInput.value.trim();
-  let finalKey;
-  if(requestedKey){
-    finalKey = requestedKey;
-  } else if(useOtp){
-    finalKey = s3KeyFor(otp, file.name + (wantEncrypt ? '.enc' : ''));
-  } else {
-    finalKey = file.name;
+  const listArea = document.getElementById('filesList');
+  listArea.innerHTML = '';
+  if(files.length===0) { listArea.innerHTML = '<div class="muted">No files</div>'; return; }
+  for(const f of files){
+    const div = document.createElement('div'); div.className='list-row';
+    div.innerHTML = `<div><strong>${f.name}</strong><div class="muted small">${f.key}</div></div>`;
+    const right = document.createElement('div'); right.style.display='flex'; right.style.gap='8px';
+    const getBtn = document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary'; getBtn.textContent='Get URL';
+    getBtn.onclick = ()=> requestGetPresign(f.key).then(url=>{ if(url) { document.getElementById('getUrlInput').value = url; alert('Presigned URL placed in input'); }});
+    const openBtn = document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary'; openBtn.textContent='Open';
+    openBtn.onclick = ()=> { if(f.url) window.open(f.url,'_blank'); else requestGetPresign(f.key).then(url=>window.open(url,'_blank')); };
+    right.appendChild(getBtn); right.appendChild(openBtn);
+    div.appendChild(right); listArea.appendChild(div);
   }
+}
 
-  try{
-    // possibly encrypt in-browser
+/* Upload handler */
+document.getElementById('uploadBtn').addEventListener('click', async ()=>{
+  const fileInput = document.getElementById('fileInput');
+  if(!fileInput.files || fileInput.files.length===0) return alert('Pick a file');
+  const file = fileInput.files[0];
+  const requestedKey = (document.getElementById('keyInput').value || '').trim();
+  const useOtp = document.getElementById('otpToggle').checked;
+  const wantEncrypt = document.getElementById('encryptToggle').checked;
+  const recipientEmail = (document.getElementById('recipientEmail').value || '').trim();
+
+  let otp = null;
+  if(useOtp) otp = generateOtp(6);
+  else if(wantEncrypt) otp = generateOtp(6); // encryption needs OTP too (we derive key from an otp)
+
+  // determine key
+  let finalKey;
+  if(requestedKey) finalKey = requestedKey;
+  else if(useOtp) finalKey = s3KeyFor(otp, file.name + (wantEncrypt ? '.enc':'' ));
+  else finalKey = file.name + (wantEncrypt ? '.enc' : '');
+
+  try {
+    setProgress(0); setMessage('Preparing file...', true);
+
     let bodyToUpload = file;
     let contentType = file.type || 'application/octet-stream';
     if(wantEncrypt){
-      if(!useOtp){
-        // encryption key must be OTP-derived — require OTP if encrypt chosen
-        otp = generateOtp(6);
-      }
-      bodyToUpload = await encryptFileBlob(file, otp);
+      bodyToUpload = await encryptBlobWithOtp(file, otp);
       contentType = 'application/octet-stream';
-      // if no explicit key provided, append .enc
-      if(!requestedKey && !finalKey.endsWith('.enc')) finalKey = finalKey + '.enc';
     }
 
     setMessage('Uploading to S3...', true);
-
-    // Upload to S3 using PutObjectCommand
-    const putCmd = new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: finalKey,
-      Body: bodyToUpload,
-      ContentType: contentType
-    });
-
-    // track progress via multipart? Browser SDK doesn't provide upload progress via send()
-    // We'll use fetch + presigned URL if you need progress; here we use direct SDK send (no progress).
+    // upload using AWS SDK PutObjectCommand
+    const putCmd = new PutObjectCommand({ Bucket: BUCKET, Key: finalKey, Body: bodyToUpload, ContentType: contentType });
     await s3Client.send(putCmd);
 
-    // generate presigned GET for immediate download convenience
-    let presignedUrl;
-    try {
-      presignedUrl = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: finalKey }), { expiresIn: 60 * 10 });
-    } catch(e){
-      console.warn('Presign GET failed', e);
+    // generate presigned GET for convenience
+    let presigned = null;
+    try { presigned = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: finalKey }), { expiresIn: 60 * 10 }); } catch(e){ console.warn('presign-get failed', e); }
+
+    // add to local files
+    files.unshift({ key: finalKey, name: finalKey.split('/').slice(-1)[0], size: bodyToUpload.size || file.size, contentType, modified: nowMs(), url: presigned });
+    saveLocal();
+    setProgress(100);
+    setMessage('Upload complete: ' + finalKey, true);
+
+    // EMAIL OTP if we generated one
+    if(otp){
+      if(!recipientEmail) {
+        alert('Upload complete. OTP: ' + otp + '\nNo recipient email configured; copy the OTP.');
+      } else {
+        const r = await emailOtpToRecipient(BACKEND_BASE, recipientEmail, otp, finalKey);
+        if(r.ok) {
+          alert('Upload complete — OTP emailed to ' + recipientEmail + '.');
+        } else {
+          console.warn('email OTP failed', r);
+          alert('Upload complete. OTP: ' + otp + '\nBut email failed — copy the OTP and share manually.');
+        }
+      }
     }
 
-    // Add to local files metadata
-    files.unshift({ key: finalKey, name: finalKey.split('/').slice(-1)[0], size: bodyToUpload.size || file.size, contentType, modified: nowMs(), star:false, deleted:false, url: presignedUrl });
+    // cleanup inputs
+    document.getElementById('fileInput').value = '';
+    document.getElementById('keyInput').value = '';
+    document.getElementById('otpToggle').checked = false;
+    document.getElementById('encryptToggle').checked = false;
 
-    saveLocal();
-    setMessage('Upload complete — key: ' + finalKey, true);
-    setProgress(100);
     renderFiles();
-
-    // show OTP to user if generated
-    if(useOtp) alert('Upload complete. OTP: ' + otp + '\nKey: ' + finalKey);
-    else if(wantEncrypt) alert('Upload complete. File encrypted with an OTP (copy the OTP displayed above)');
-
-    // clear inputs
-    fileInput.value=''; keyInput.value=''; otpToggle.checked=false; encryptToggle.checked=false;
   } catch(err){
     console.error(err);
-    setMessage('Upload failed: ' + (err.message || err), false);
     setProgress(0);
+    setMessage('Upload failed: ' + (err.message || err), false);
+    alert('Upload failed: ' + (err.message || err));
   }
 });
 
-/* ---------- Presigned GET generation (browser) ---------- */
+/* Presigned GET (browser) */
 async function requestGetPresign(key){
-  const decoded = decodeURIComponent(key);
-  try{
-    const presigned = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: decoded }), { expiresIn: 60 * 10 });
-    getUrlInput.value = presigned;
-    alert('Presigned GET placed in the input (valid 10 min)');
+  try {
+    const presigned = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn: 60 * 10 });
     return presigned;
-  } catch(e){
-    console.error(e);
-    alert('Error generating presigned GET: ' + (e.message || e));
-    return null;
-  }
+  } catch(e){ console.error('get presign failed', e); alert('Could not generate presigned GET: ' + e.message); return null; }
 }
 
-/* ---------- UI bindings for list/grid and get button ---------- */
-document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u=getUrlInput.value.trim(); if(!u) return alert('Paste presigned GET URL'); window.open(u,'_blank'); });
-document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. otp/123456/file.ext):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
+/* open/get buttons */
+document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = document.getElementById('getUrlInput').value.trim(); if(!u) return alert('Paste presigned GET URL'); window.open(u,'_blank'); });
+document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. otp/123456/file.ext):'); if(!k) return; const url = await requestGetPresign(decodeURIComponent(k)); if(url) document.getElementById('getUrlInput').value = url; });
 
-document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; });
-document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; });
-
-document.getElementById('quickUpload').addEventListener('click',(e)=>{ e.preventDefault(); fileInput.click(); });
-
+/* initial render */
 renderFiles();
-updateCounts();
 
 </script>
 </body>
