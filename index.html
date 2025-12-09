@@ -181,8 +181,12 @@
 /*
   CloudVault demo front-end
 */
+// keep API_BASE as your presign/backend host for presign & metadata
 const API_BASE = 'http://localhost:8080';
-const BACKEND_BASE = API_BASE; // used for OTP email
+
+// BACKEND_BASE must point to the service that exposes /send-otp (your Node OTP server).
+// You said your OTP server runs on port 3000 locally, so point BACKEND_BASE there.
+const BACKEND_BASE = 'http://localhost:3000';
 
 // ---------- Auth helpers ----------
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
@@ -438,6 +442,8 @@ function openPresigned(url, key){
 }
 
 // ---------- Upload flows (+ OTP email) ----------
+// This upload flow first tries API_BASE + '/presign'. If that fails it will try BACKEND_BASE + '/presign' as fallback.
+// This is intentionally minimal and preserves your original behavior.
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   if(!file) return alert('Pick a file to upload');
@@ -451,28 +457,66 @@ uploadBtn.addEventListener('click', async ()=>{
     setMessage('Requesting presigned URL...', true);
     let presignUrl = manualPut.value.trim();
     let realKey = keyVal;
+    let presignResponseJson = null;
 
-    if(API_BASE){
-      const resp = await fetch(API_BASE + '/presign', {
+    // helper to try a presign endpoint (returns json or throws)
+    async function tryPresign(baseUrl){
+      const resp = await fetch(baseUrl + '/presign', {
         method:'POST',
         headers: authHeaders({'Content-Type':'application/json'}),
         body: JSON.stringify({ filename:file.name, contentType:file.type, key: keyVal, otp: manualOtp })
       });
-      if(!resp.ok) throw new Error('Presign request failed: ' + resp.status);
-      const j = await resp.json();
-      presignUrl = j.url; realKey = j.key || keyVal;
+      if(!resp.ok) throw new Error('Presign request failed: ' + resp.status + ' @ ' + baseUrl);
+      return await resp.json();
     }
+
+    if(!presignUrl){ // only call presign if manual PUT not provided
+      try {
+        // primary attempt
+        presignResponseJson = await tryPresign(API_BASE);
+      } catch(primaryErr) {
+        console.warn('Primary presign failed:', primaryErr);
+        // fallback attempt to BACKEND_BASE (often your OTP/email server might also host presign during testing)
+        try {
+          presignResponseJson = await tryPresign(BACKEND_BASE);
+        } catch(fallbackErr) {
+          console.error('Fallback presign failed:', fallbackErr);
+          throw new Error('Presign failed on both API_BASE and BACKEND_BASE.');
+        }
+      }
+
+      if(presignResponseJson){
+        presignUrl = presignResponseJson.url;
+        realKey = presignResponseJson.key || keyVal;
+      }
+    }
+
     if(!presignUrl) throw new Error('No presigned URL available');
 
     await xhrUpload(presignUrl, file);
 
-    if(API_BASE){
-      await fetch(API_BASE + '/files', {
-        method:'POST',
-        headers: authHeaders({'Content-Type':'application/json'}),
-        body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
-      });
+    // Register metadata: try API_BASE then BACKEND_BASE as fallback (non-blocking)
+    try {
+      if(API_BASE){
+        await fetch(API_BASE + '/files', {
+          method:'POST',
+          headers: authHeaders({'Content-Type':'application/json'}),
+          body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
+        });
+      }
+    } catch(e){
+      // try fallback metadata endpoint on BACKEND_BASE
+      try {
+        await fetch(BACKEND_BASE + '/files', {
+          method:'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
+        });
+      } catch(e2){
+        console.warn('Could not register metadata on either API_BASE or BACKEND_BASE', e, e2);
+      }
     }
+
     files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
     saveLocalFiles();
     setMessage('Upload finished: ' + realKey, true);
