@@ -16,7 +16,6 @@
     .muted{color:var(--muted)}
     .small{font-size:.9rem}
     .actions button{margin-right:6px}
-    .star{cursor:pointer}
     .grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
     .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9}
     .progress { background:#e9eef8; height:18px; border-radius:10px; overflow:visible; }
@@ -27,22 +26,19 @@
     .nav-item { color:var(--muted); display:block; margin-bottom:6px; text-decoration:none; }
     .nav-item.active { color:var(--accent); font-weight:700; }
     .meta-muted { color:#94a3b8; font-size:.85rem; }
-    .btn-outline-warning { color: #b45309; border-color:#fbbf24; }
-    .otp-row { margin-top:12px; }
     .small-checkbox { margin-right:10px; display:inline-flex; align-items:center; gap:6px; }
     #otpInline { width:130px; margin-left:8px; display:none; }
     #verifyOtpBtn { display:none; margin-left:6px; }
     #backendOverrideWrap { display:none; margin-top:10px; }
-    .diag { margin-top:8px; font-size:.9rem; color:#6b7280; white-space:pre-wrap; }
+    .diag { margin-top:8px; font-size:.9rem; color:#6b7280; }
   </style>
 </head>
 <body>
   <div class="topbar">
-    <!-- keep your logo references intact; fallback attempts try local and packaged images -->
     <img id="topLogo" src="asset/sing-crayon-shin-chan.gif" data-attempt="0" class="logo" alt="CloudVault logo"
          onerror="
            if(this.dataset.attempt==='0'){ this.dataset.attempt='1'; this.src='http://localhost:8080/logo.gif'; }
-           else if(this.dataset.attempt==='1'){ this.dataset.attempt='2'; this.src='/mnt/data/69535009-d515-4364-99ad-4ab9664059c6.png'; }
+           else if(this.dataset.attempt==='1'){ this.dataset.attempt='2'; this.src='/mnt/data/cfc48cb5-7ecd-4cb4-9ea7-2764acdde733.png'; }
            else this.style.display='none';
          ">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
@@ -70,7 +66,7 @@
 
       <div id="backendOverrideWrap">
         <small class="muted">Backend override (paste reachable URL for testing):</small>
-        <input id="backendOverride" class="form-control form-control-sm mt-1" placeholder="https://&lt;your-ngrok-or-host&gt;.example" />
+        <input id="backendOverride" class="form-control form-control-sm mt-1" placeholder="https://ngrok-example.ngrok.io" />
         <div class="diag" id="backendDiag"></div>
       </div>
     </aside>
@@ -86,8 +82,7 @@
 
         <div class="row g-2 align-items-center mt-3">
           <div class="col-auto"><input id="fileInput" type="file" class="form-control form-control-sm"></div>
-          <div class="col-auto"><input id="keyInput" type="text" class="form-control form-control-sm" placeholder="storage key (optional)"></div>
-          <div class="col-auto"><input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password (optional)"></div>
+          <!-- removed storage key and password inputs -->
           <div class="col-auto"><button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload</button></div>
         </div>
 
@@ -148,15 +143,12 @@
   </div>
 
 <script>
-/*
-  Full debugged index.html script:
-  - No sign-in added
-  - Diagnostics with explainFailure()
-  - Presign PUT, manual PUT fallback, OTP send/verify, GET presign
-  - Backend override support (for ngrok/localtunnel)
+/* Updated: removed key/password inputs; clearer OTP failure popup and Backend override show.
+   Default storage key = images/<filename>
 */
-const API_BASE = 'http://localhost:8080';    // primary API (if you have one)
-const BACKEND_BASE = 'http://localhost:3000'; // legacy backend
+
+const API_BASE = 'http://localhost:8080';
+const BACKEND_BASE = 'http://localhost:3000';
 const DEFAULT_RECIPIENT_EMAIL = 'shaaditya87@gmail.com';
 
 const backendOverrideWrap = document.getElementById('backendOverrideWrap');
@@ -164,8 +156,6 @@ const backendOverride = document.getElementById('backendOverride');
 const backendDiag = document.getElementById('backendDiag');
 
 const fileInput = document.getElementById('fileInput');
-const keyInput = document.getElementById('keyInput');
-const pwInput = document.getElementById('pwInput');
 const uploadBtn = document.getElementById('uploadBtn');
 const uploadManual = document.getElementById('uploadManual');
 const manualPut = document.getElementById('manualPut');
@@ -186,9 +176,8 @@ const manualPutHint = document.getElementById('manualPutHint');
 
 const STORE_KEY = 'cv_files_v1';
 let files = [];
-let pendingUpload = null; // { file, keyVal }
+let pendingUpload = null;
 
-// helpers
 function setMessage(text, ok=true){
   uploadMsg.textContent = text || '';
   uploadMsg.style.color = ok ? 'green' : 'crimson';
@@ -200,78 +189,7 @@ function saveLocalFiles(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)
 function loadLocalFiles(){ const raw=localStorage.getItem(STORE_KEY); if(!raw) return false; try{ files=JSON.parse(raw); return true;}catch(e){return false;} }
 function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 function humanSize(n){ if(n!==0 && !n) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
-function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
 
-// centralized diagnostics: explain why operations stopped/failed
-function explainFailure(context, err){
-  console.error('Operation failed:', context, err);
-  let short = 'Operation failed: ' + context;
-  let detail = '';
-  let likely = '';
-
-  if(!err){
-    detail = 'No additional error information available.';
-  } else if(err instanceof Error){
-    detail = err.message || String(err);
-    const m = (detail || '').toLowerCase();
-    if(m.includes('timeout')) likely = 'timeout';
-    else if(m.includes('failed to fetch') || m.includes('networkerror') || m.includes('network')) likely = 'network-or-cors';
-    else likely = 'server-error';
-  } else if(typeof err === 'string'){
-    detail = err;
-    const lm = err.toLowerCase();
-    if(lm.includes('cors') || lm.includes('access-control')) likely = 'cors';
-    else if(lm.includes('network') || lm.includes('failed to fetch')) likely = 'network-or-cors';
-    else likely = 'server-error';
-  } else if(err && typeof err === 'object' && ('status' in err || 'ok' in err)){
-    try{
-      const st = err.status;
-      detail = 'HTTP ' + st + (err.statusText ? (' ' + err.statusText) : '');
-      if(st>=400 && st<500) likely='client-error';
-      else if(st>=500) likely='server-error';
-      else likely='unexpected-status';
-    }catch(e){
-      detail = JSON.stringify(err);
-      likely='unknown';
-    }
-  } else {
-    detail = JSON.stringify(err);
-    likely='unknown';
-  }
-
-  const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
-  const originIsLocalhost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
-  if(!originIsLocalhost && (String(overrideVal||BACKEND_BASE||API_BASE).includes('localhost') || String(overrideVal||BACKEND_BASE||API_BASE).includes('127.0.0.1'))){
-    likely = 'localhost-unreachable-from-remote';
-  }
-
-  let advice = '';
-  if(likely === 'timeout'){
-    advice = 'The request timed out. If your backend is slow, increase server responsiveness or adjust frontend timeout.';
-  } else if(likely === 'network-or-cors'){
-    advice = 'Likely a network problem or CORS issue. Check browser console (Network tab) and ensure backend sets Access-Control-Allow-Origin. If your backend runs on localhost and this page is hosted remotely, the browser cannot reach localhost — use ngrok/localtunnel and paste the public URL in Backend override.';
-  } else if(likely === 'cors'){
-    advice = 'CORS rejection detected. Ensure backend responds with Access-Control-Allow-Origin and Access-Control-Allow-Headers/Methods.';
-  } else if(likely === 'localhost-unreachable-from-remote'){
-    advice = 'This page appears hosted remotely while backend points to localhost. Remote pages cannot reach your machine at http://localhost. Use ngrok/localtunnel and paste the public URL into Backend override.';
-  } else if(likely === 'client-error'){
-    advice = 'Client error (4xx). Check request payload and backend logs for validation/auth issues.';
-  } else if(likely === 'server-error'){
-    advice = 'Server error (5xx). Check backend logs for exceptions and ensure server is healthy.';
-  } else {
-    advice = 'Inspect browser console and backend logs for more information.';
-  }
-
-  const shortUi = `${short} — ${detail}`;
-  backendDiag.innerText = shortUi + (advice ? '\n\nAdvice: ' + advice : '');
-  backendOverrideWrap.style.display = 'block';
-  setMessage(short + ': ' + (detail || 'unknown'), false);
-  try{
-    alert(short + '\n' + (detail ? detail + '\n\n' : '') + 'Likely cause: ' + likely + '\n\n' + advice);
-  }catch(e){}
-}
-
-// fetch timeout helper
 function fetchWithTimeout(url, opts={}, timeout=4000){
   return new Promise((resolve, reject)=>{
     const timer = setTimeout(()=> reject(new Error('timeout')), timeout);
@@ -279,13 +197,6 @@ function fetchWithTimeout(url, opts={}, timeout=4000){
   });
 }
 
-// minimal headers helper (no auth)
-function authHeaders(extra){
-  const headers = Object.assign({}, extra || {});
-  return headers;
-}
-
-// reachability probe
 async function checkReachable(base){
   if(!base) return { ok:false, reason:'no-base', base };
   const probe = base.replace(/\/$/,'') + '/health';
@@ -294,6 +205,7 @@ async function checkReachable(base){
     if(r.ok) return { ok:true, base, reason:'health-ok' };
     return { ok:true, base, reason:'health-non200' };
   }catch(e){
+    // fallback root
     try{
       const r2 = await fetchWithTimeout(base.replace(/\/$/,''), { method:'GET', mode:'cors' }, 3000);
       if(r2.ok) return { ok:true, base, reason:'root-ok' };
@@ -309,7 +221,6 @@ async function checkReachable(base){
   }
 }
 
-// POST fallback across override -> BACKEND_BASE -> API_BASE
 async function tryPostWithFallback(path, payload){
   const override = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
   const hostsToTry = [];
@@ -320,7 +231,7 @@ async function tryPostWithFallback(path, payload){
   for(const host of hostsToTry){
     try{
       const url = host + path;
-      const resp = await fetchWithTimeout(url, { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body: JSON.stringify(payload), mode:'cors' }, 6000);
+      const resp = await fetchWithTimeout(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload), mode:'cors' }, 6000);
       const j = await resp.json().catch(()=>null);
       return { ok: resp.ok, status: resp.status, json: j, base:host, error: null };
     }catch(err){
@@ -330,7 +241,6 @@ async function tryPostWithFallback(path, payload){
   return { ok:false, error: lastErr ? (lastErr.message || String(lastErr)) : 'no-host', base:null };
 }
 
-// Send OTP (server should email OTP — frontend never displays OTP)
 async function sendOtpToServer(keyVal){
   setMessage('Checking backend reachability...', true);
   const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
@@ -346,54 +256,45 @@ async function sendOtpToServer(keyVal){
   }
   if(!reachable || !reachable.base){
     backendOverrideWrap.style.display = 'block';
-    backendDiag.innerText = 'Backend unreachable from this browser. If your backend runs on localhost and this page is hosted remotely, the browser cannot reach localhost. Use ngrok/localtunnel or host the backend and paste the URL here.';
-    setMessage('Failed to send OTP: backend unreachable (see instructions)', false);
-    explainFailure('send-otp: backend-unreachable', 'no reachable backend');
+    backendDiag.innerText = 'Backend unreachable from this browser. If backend is on localhost and this page is hosted remotely, the browser cannot reach it. Use ngrok or host backend and paste URL here.';
+    setMessage('Failed to send OTP: backend unreachable', false);
+    alert('Failed to send OTP: backend unreachable.\n\nLikely causes:\n• Frontend hosted remotely but backend is http://localhost:3000 (remote cannot reach localhost).\n• CORS blocked the request.\n\nFix: host backend publicly or run ngrok and paste URL into Backend override on the left.');
     return { ok:false, error:'unreachable' };
   }
 
   backendOverrideWrap.style.display = 'none';
   setMessage('Sending OTP to server (' + reachable.base + ')...', true);
-  try{
-    const res = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
-    if(!res.ok){
-      explainFailure('send-otp: server-response', res.error || res);
-      return res;
-    }
-    setMessage('OTP request accepted by ' + res.base, true);
+  const res = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
+  if(!res.ok){
+    backendOverrideWrap.style.display = 'block';
+    backendDiag.innerText = 'Send OTP failed: ' + (res.error || 'unknown') + '. Check CORS or paste a reachable backend URL.';
+    // clearer popup message
+    alert('Failed to send OTP. Likely network or CORS issue.\n\nWhat to try:\n• If your backend runs on localhost and this page is hosted remotely, run `ngrok http 3000` and paste the ngrok URL into the Backend override box on the left.\n• Ensure your backend allows CORS for this origin (Access-Control-Allow-Origin).\n\nOpen browser console (F12) → Network to see full error details.');
+    setMessage('Failed to send OTP: ' + (res.error || 'unknown'), false);
     return res;
-  }catch(err){
-    explainFailure('send-otp: fetch-failed', err);
-    return { ok:false, error: err.message || String(err) };
   }
+  setMessage('OTP request accepted by ' + res.base, true);
+  return res;
 }
 
-// Verify OTP
 async function verifyOtpOnServer(otp, keyVal){
   setMessage('Verifying OTP...', true);
-  try{
-    const res = await tryPostWithFallback('/verify-otp', { otp, key: keyVal });
-    if(!res.ok){
-      explainFailure('verify-otp: server-response', res.error || res);
-      return res;
-    }
-    setMessage('OTP verified by ' + res.base, true);
+  const res = await tryPostWithFallback('/verify-otp', { otp, key: keyVal });
+  if(!res.ok){
+    backendOverrideWrap.style.display = 'block';
+    backendDiag.innerText = 'Verify failed: ' + (res.error || 'unknown');
+    setMessage('OTP verify failed: ' + (res.error || 'unknown'), false);
     return res;
-  }catch(err){
-    explainFailure('verify-otp: fetch-failed', err);
-    return { ok:false, error: err.message || String(err) };
   }
+  setMessage('OTP verified by ' + res.base, true);
+  return res;
 }
 
-// Perform presign + PUT upload
 async function requestPresignAndUpload(file, keyVal, otpForPresign){
   setProgress(0);
   setMessage('Requesting presigned URL...', true);
-
-  // manual PUT override - if user provided a full PUT URL, use it
   let presignUrl = manualPut.value.trim();
   let realKey = keyVal;
-
   if(!presignUrl){
     const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
     const hosts = [];
@@ -407,9 +308,9 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
         const url = host + '/presign';
         const resp = await fetchWithTimeout(url, {
           method:'POST',
-          headers: authHeaders({'Content-Type':'application/json'}),
+          headers: { 'Content-Type':'application/json' },
           body: JSON.stringify({ filename: file.name, contentType: file.type, key: realKey, otp: (otpForPresign || '') }),
-          mode: 'cors'
+          mode:'cors'
         }, 8000);
         if(!resp.ok) throw new Error('status ' + resp.status);
         presignResponseJson = await resp.json();
@@ -424,20 +325,13 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
     if(!presignUrl){
       const msg = 'Presign failed: ' + (lastErr ? (lastErr.message || String(lastErr)) : 'no-host');
       setMessage(msg, false);
-      explainFailure('presign', lastErr || 'no presign url received');
+      alert(msg + '\n\nIf your backend is on localhost and this page is hosted remotely, run ngrok and paste its URL into Backend override.');
       throw new Error(msg);
     }
   }
 
-  // actual upload via PUT (XHR to get progress)
-  try{
-    await xhrUpload(presignUrl, file);
-  }catch(e){
-    explainFailure('upload-put', e);
-    throw e;
-  }
+  await xhrUpload(presignUrl, file);
 
-  // Try to notify backend about file (metadata registration) — best-effort
   try {
     const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
     const metaHosts = [];
@@ -446,204 +340,76 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
     if(BACKEND_BASE) metaHosts.push(BACKEND_BASE.replace(/\/$/,''));
     for(const h of metaHosts){
       try{
-        await fetchWithTimeout(h + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }), mode:'cors' }, 6000);
+        await fetchWithTimeout(h + '/files', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }), mode:'cors' }, 6000);
         break;
       }catch(e){ continue; }
     }
   }catch(e){ console.warn('metadata registration failed', e); }
 
-  // success
   files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: undefined });
   saveLocalFiles();
   setMessage('Upload finished: ' + realKey, true);
   setProgress(100);
   renderFiles();
   pendingUpload = null;
-  fileInput.value = ''; keyInput.value=''; manualPut.value='';
+  fileInput.value = ''; manualPut.value='';
 }
 
-// XMLHttpRequest upload (to show progress)
-function xhrUpload(url, file){
-  return new Promise((resolve,reject)=>{
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', url, true);
-    xhr.onload = ()=> { if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); };
-    xhr.onerror = ()=> reject(new Error('Network error'));
-    xhr.upload.onprogress = e=> { if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
-    xhr.send(file);
-  });
-}
-
-// Request presigned GET
-async function requestGetPresign(key){
-  const decoded = decodeURIComponent(key);
-  const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
-  if(!API_BASE && !overrideVal) {
-    const f = files.find(x=>x.key===decoded);
-    if(f && f.url) { getUrlInput.value = f.url; alert('Presigned GET placed in the input'); return; }
-    return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
-  }
-  try{
-    const host = overrideVal || API_BASE;
-    const resp = await fetch(host.replace(/\/$/,'') + '/presign-get', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: decoded }), mode:'cors' });
-    if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
-    const j = await resp.json();
-    getUrlInput.value = j.url;
-    alert('Presigned GET placed in the input');
-  }catch(e){ explainFailure('presign-get', e); }
-}
-
-// File list UI
-function updateCounts(){
-  const all = files.filter(f=>!f.deleted).length;
-  const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
-  const star = files.filter(f=>!f.deleted && f.star).length;
-  const trash = files.filter(f=>f.deleted).length;
-  document.getElementById('countAll').textContent = all ? ' ('+all+')' : '';
-  document.getElementById('countRecent').textContent = recent ? ' ('+recent+')' : '';
-  document.getElementById('countStar').textContent = star ? ' ('+star+')' : '';
-  document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : '';
-}
-function toggleStar(key){ const it=files.find(x=>x.key===key); if(!it) return; it.star=!it.star; saveLocalFiles(); renderFiles(); }
-function moveToTrash(key){ if(!confirm('Move to Trash?')) return; const it=files.find(x=>x.key===key); if(!it) return; it.deleted=true; it.modified=nowMs(); saveLocalFiles(); renderFiles(); }
-function restoreFromTrash(key){ const it=files.find(x=>x.key===key); if(!it) return; it.deleted=false; it.modified=nowMs(); saveLocalFiles(); renderFiles(); }
-function permanentlyDelete(key){ if(!confirm('Permanently delete? This cannot be undone.')) return; const idx=files.findIndex(x=>x.key===key); if(idx===-1) return; files.splice(idx,1); saveLocalFiles(); renderFiles(); }
-function openPresigned(url,key){ if(url){ window.open(url,'_blank'); return; } requestGetPresign(encodeURIComponent(key)); }
-
-function renderFiles(){
-  const list = files.slice().filter(f=>!f.deleted).sort((a,b)=>(b.modified||0)-(a.modified||0));
-  filesList.innerHTML=''; if(list.length===0) filesList.innerHTML='<div class="muted">No files</div>';
-  list.forEach(f=>{
-    const div=document.createElement('div'); div.className='list-row';
-    const left=document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
-    const right=document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
-    const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size) + (f.modified?(' • '+formatDate(f.modified)):'');
-
-    const actions=document.createElement('div'); actions.className='actions';
-    const getBtn=document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL'; getBtn.onclick=()=> requestGetPresign(f.key);
-    const openBtn=document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary me-1'; openBtn.textContent='Open'; openBtn.onclick=()=> openPresigned(f.url,f.key);
-    const starBtn=document.createElement('button'); starBtn.className='btn btn-sm ' + (f.star ? 'btn-warning' : 'btn-outline-warning') + ' me-1'; starBtn.textContent=f.star?'★':'☆'; starBtn.onclick=()=>toggleStar(f.key);
-    const delBtn=document.createElement('button'); delBtn.className='btn btn-sm btn-outline-danger'; delBtn.textContent='Delete'; delBtn.onclick=()=>moveToTrash(f.key);
-
-    actions.appendChild(getBtn); actions.appendChild(openBtn); actions.appendChild(starBtn); actions.appendChild(delBtn);
-    right.appendChild(meta); right.appendChild(actions);
-    div.appendChild(left); div.appendChild(right); filesList.appendChild(div);
-  });
-
-  filesGrid.innerHTML='';
-  list.forEach(f=>{
-    const t=document.createElement('div'); t.className='file-tile';
-    t.innerHTML=`<div style="font-size:26px">` + (f.name.toLowerCase().match(/\.jpg|\.png|\.gif/) ? '🖼️' : '📁') + `</div>
-      <div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div>
-      <div class="muted small">${humanSize(f.size)}</div>
-      <div class="mt-2"><button class="btn btn-sm btn-outline-primary me-1">Get URL</button><button class="btn btn-sm btn-outline-secondary me-1">Open</button></div>`;
-    const btns = t.querySelectorAll('button');
-    if(btns[0]) btns[0].onclick = ()=> requestGetPresign(f.key);
-    if(btns[1]) btns[1].onclick = ()=> openPresigned(f.url, f.key);
-    filesGrid.appendChild(t);
-  });
-
-  updateCounts();
-}
-
-// demo seed if no API and no stored
-function seedDemoIfNeeded(){ if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
-seedDemoIfNeeded();
-
-// UI wiring and flows
-document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
-document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
-document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
-document.getElementById('listViewBtn')?.addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderFiles(); });
-document.getElementById('gridViewBtn')?.addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderFiles(); });
-document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
-
-chkOtp.addEventListener('change', updateCheckboxUI);
-chkPresign.addEventListener('change', updateCheckboxUI);
-function updateCheckboxUI(){
-  if(chkOtp.checked){ sendOtpBtn.style.display='inline-block'; otpInline.style.display='inline-block'; verifyOtpBtn.style.display='inline-block'; } else { sendOtpBtn.style.display='none'; otpInline.style.display='none'; verifyOtpBtn.style.display='none'; }
-  if(chkPresign.checked){ manualPut.style.display='block'; manualPutHint.style.display='block'; uploadManual.style.display='inline-block'; } else { manualPut.style.display='none'; manualPutHint.style.display='none'; uploadManual.style.display='none'; }
-}
-updateCheckboxUI();
-
-// upload button main flow
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   if(!file) return alert('Pick a file to upload');
-  let keyVal = keyInput.value.trim() || file.name;
+  let keyVal = file.name;
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
 
-  // OTP not selected -> direct presign+upload
   if(!chkOtp.checked){
-    try{
-      await requestPresignAndUpload(file, keyVal);
-    }catch(e){
-      console.error(e);
-    }
+    try{ await requestPresignAndUpload(file, keyVal); }catch(e){ console.error(e); }
     return;
   }
 
-  // OTP selected: verify typed OTP (if present) or send OTP and pause
   const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
   if(typedOtp){
     setMessage('Verifying OTP...', true);
     const vr = await verifyOtpOnServer(typedOtp, keyVal);
-    if(!vr.ok){
-      alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status)) + '\nCheck your backend logs or ensure you typed the OTP exactly as received.');
-      return;
-    }
-    try{
-      await requestPresignAndUpload(file, keyVal, typedOtp);
-    }catch(e){ console.error(e); }
+    if(!vr.ok){ alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status))); return; }
+    try{ await requestPresignAndUpload(file, keyVal, typedOtp); }catch(e){ console.error(e); }
     return;
   }
 
-  // no typed OTP: send OTP and pause
   setMessage('Sending OTP to ' + DEFAULT_RECIPIENT_EMAIL + '...', true);
   const sendRes = await sendOtpToServer(keyVal);
-  if(!sendRes.ok){
-    return;
-  }
+  if(!sendRes.ok) return;
   pendingUpload = { file, keyVal };
-  alert('An OTP has been sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Please check your email, paste the OTP in the inline box and press Verify OTP to continue the upload.');
+  alert('An OTP has been sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Please check your email, paste the OTP into the inline box, and click Verify OTP to continue the upload.');
   setMessage('OTP sent — waiting for you to paste OTP and press Verify OTP', true);
 });
 
-// Verify OTP button
 verifyOtpBtn.addEventListener('click', async ()=>{
   const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
   if(!typedOtp) return alert('Enter OTP you received in email.');
-  let keyVal = keyInput.value.trim();
-  if(!keyVal && pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
-  if(!keyVal) return alert('Enter a key or start an upload so backend can verify OTP for that key.');
+  let keyVal = '';
+  if(pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
+  if(!keyVal) return alert('Start an upload first so backend can verify OTP for that key.');
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
 
   setMessage('Verifying OTP...', true);
   const vr = await verifyOtpOnServer(typedOtp, keyVal);
-  if(!vr.ok){
-    alert('OTP verify failed: ' + (vr.error || ('status ' + vr.status)));
-    return;
-  }
-  alert('OTP verified successfully. Upload will continue if it was pending.');
+  if(!vr.ok){ alert('OTP verify failed: ' + (vr.error || ('status ' + vr.status))); return; }
+  alert('OTP verified successfully. Upload will continue.');
   setMessage('OTP verified. Continuing upload...', true);
   if(pendingUpload && pendingUpload.file){
-    try{
-      await requestPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp);
-    }catch(e){ console.error(e); }
+    try{ await requestPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp); }catch(e){ console.error(e); }
   }
 });
 
-// explicit Send OTP button
 sendOtpBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
-  let keyVal = keyInput.value.trim() || (file ? file.name : '');
-  if(!keyVal) return alert('Enter key or choose a file to associate OTP with.');
+  let keyVal = file ? file.name : '';
+  if(!keyVal) return alert('Choose a file first to associate OTP.');
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
   const r = await sendOtpToServer(keyVal);
-  if(r.ok) alert('OTP request sent to server. Check email.');
+  if(r.ok) alert('OTP request accepted by server. Check email.');
 });
 
-// Manual presigned PUT upload
 uploadManual.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   const url = manualPut.value.trim();
@@ -657,15 +423,86 @@ uploadManual.addEventListener('click', async ()=>{
     saveLocalFiles();
     renderFiles();
     setMessage('Manual upload finished', true);
-  }catch(e){ setMessage('Manual upload error: '+e.message, false); explainFailure('manual-put', e); }
+  }catch(e){ setMessage('Manual upload error: '+e.message, false); alert('Manual upload failed: ' + e.message); }
 });
 
-// open GET URL / request presign
+function xhrUpload(url, file){
+  return new Promise((resolve,reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    xhr.onload = ()=> { if(xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error('Upload failed: '+xhr.status)); };
+    xhr.onerror = ()=> reject(new Error('Network error'));
+    xhr.upload.onprogress = e=> { if(e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
+    xhr.send(file);
+  });
+}
+
+async function requestGetPresign(key){
+  const decoded = decodeURIComponent(key);
+  const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+  const host = overrideVal || API_BASE;
+  try{
+    const resp = await fetch(host.replace(/\/$/,'') + '/presign-get', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ key: decoded }), mode:'cors' });
+    if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
+    const j = await resp.json();
+    getUrlInput.value = j.url;
+    alert('Presigned GET placed in the input');
+  }catch(e){ alert('Error requesting GET presign: '+e.message); }
+}
+
+function updateCounts(){
+  const all = files.filter(f=>!f.deleted).length;
+  const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
+  const star = files.filter(f=>!f.deleted && f.star).length;
+  const trash = files.filter(f=>f.deleted).length;
+  document.getElementById('countAll').textContent = all ? ' ('+all+')' : '';
+  document.getElementById('countRecent').textContent = recent ? ' ('+recent+')' : '';
+  document.getElementById('countStar').textContent = star ? ' ('+star+')' : '';
+  document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : '';
+}
+function renderFiles(){
+  const list = files.slice().filter(f=>!f.deleted).sort((a,b)=>(b.modified||0)-(a.modified||0));
+  filesList.innerHTML=''; if(list.length===0) filesList.innerHTML='<div class="muted">No files</div>';
+  list.forEach(f=>{
+    const div=document.createElement('div'); div.className='list-row';
+    const left=document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
+    const right=document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
+    const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size) + (f.modified?(' • '+new Date(f.modified).toLocaleString()):'');
+
+    const actions=document.createElement('div'); actions.className='actions';
+    const getBtn=document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL'; getBtn.onclick=()=> requestGetPresign(f.key);
+    const openBtn=document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary me-1'; openBtn.textContent='Open'; openBtn.onclick=()=> window.open(f.url || '#','_blank');
+    const delBtn=document.createElement('button'); delBtn.className='btn btn-sm btn-outline-danger'; delBtn.textContent='Delete'; delBtn.onclick=()=>{ if(confirm('Move to Trash?')){ f.deleted=true; saveLocalFiles(); renderFiles(); } };
+
+    actions.appendChild(getBtn); actions.appendChild(openBtn); actions.appendChild(delBtn);
+    right.appendChild(meta); right.appendChild(actions);
+    div.appendChild(left); div.appendChild(right); filesList.appendChild(div);
+  });
+  updateCounts();
+}
+
+function seedDemoIfNeeded(){ if(API_BASE) return; if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
+seedDemoIfNeeded();
+
+document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
+document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
+document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
+document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
+
+chkOtp.addEventListener('change', updateCheckboxUI);
+chkPresign.addEventListener('change', updateCheckboxUI);
+function updateCheckboxUI(){
+  if(chkOtp.checked){ sendOtpBtn.style.display='inline-block'; otpInline.style.display='inline-block'; verifyOtpBtn.style.display='inline-block'; } else { sendOtpBtn.style.display='none'; otpInline.style.display='none'; verifyOtpBtn.style.display='none'; }
+  if(chkPresign.checked){ manualPut.style.display='block'; manualPutHint.style.display='block'; uploadManual.style.display='inline-block'; } else { manualPut.style.display='none'; manualPutHint.style.display='none'; uploadManual.style.display='none'; }
+}
+updateCheckboxUI();
+
 document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
 renderFiles();
 updateCounts();
+
 </script>
 </body>
 </html>
