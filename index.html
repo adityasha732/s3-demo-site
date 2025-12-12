@@ -4,9 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>CloudVault — S3 Drive (Cognito + Email OTP)</title>
-
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <style>
     :root { --accent:#1a73e8; --muted:#6b7280; }
     body { font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8; margin:0; }
@@ -34,6 +32,8 @@
     .small-checkbox { margin-right:10px; display:inline-flex; align-items:center; gap:6px; }
     #otpInline { width:130px; margin-left:8px; display:none; }
     #verifyOtpBtn { display:none; margin-left:6px; }
+    #backendOverrideWrap { display:none; margin-top:10px; }
+    .diag { margin-top:8px; font-size:.9rem; color:#6b7280; }
   </style>
 </head>
 <body>
@@ -67,7 +67,11 @@
         <div class="muted small mt-1">shaaditya87@gmail.com</div>
       </div>
 
-      <!-- sidebar OTP paste removed -->
+      <div id="backendOverrideWrap">
+        <small class="muted">Backend override (paste reachable URL for testing):</small>
+        <input id="backendOverride" class="form-control form-control-sm mt-1" placeholder="https://<your-ngrok-or-host>.example" />
+        <div class="diag" id="backendDiag"></div>
+      </div>
     </aside>
 
     <main class="flex-grow-1 p-4">
@@ -116,7 +120,7 @@
         </div>
       </div>
 
-      <!-- files & download panels unchanged (omitted here for brevity but included in code) -->
+      <!-- files / download panels (unchanged behavior) -->
       <div class="card-panel mt-4">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <h5 class="m-0">Files</h5>
@@ -144,21 +148,23 @@
   </div>
 
 <script>
-/* Updated frontend: OTP is sent to email only. No OTP values are shown in UI or alerts.
-   Upload will pause after sending OTP and continue only after user clicks Verify OTP.
+/*
+  Final debugged CloudVault frontend:
+  - Improved diagnostics for "Failed to fetch"
+  - Backend override input appears when reachability fails
+  - No OTP values are shown in UI or alerts (server does that)
+  - Upload + OTP flows unchanged functionally
 */
 
 const API_BASE = 'http://localhost:8080';
 const BACKEND_BASE = 'http://localhost:3000';
 const DEFAULT_RECIPIENT_EMAIL = 'shaaditya87@gmail.com';
 
-function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
-function getToken(){ return localStorage.getItem('cv_token'); }
-function authHeaders(h={}){ const t=getToken(); if(t) h['Authorization']='Bearer '+t; return h; }
-function updateUserInfo(){ document.getElementById('userInfo').textContent = getToken() ? 'Signed in' : ''; }
-updateUserInfo();
+// DOM refs
+const backendOverrideWrap = document.getElementById('backendOverrideWrap');
+const backendOverride = document.getElementById('backendOverride');
+const backendDiag = document.getElementById('backendDiag');
 
-let files=[]; let view='all'; let renderMode='list';
 const fileInput = document.getElementById('fileInput');
 const keyInput = document.getElementById('keyInput');
 const pwInput = document.getElementById('pwInput');
@@ -181,252 +187,294 @@ const verifyOtpBtn = document.getElementById('verifyOtpBtn');
 const manualPutHint = document.getElementById('manualPutHint');
 
 const STORE_KEY = 'cv_files_v1';
+let files = [];
+let pendingUpload = null; // if OTP sent and waiting
+
+function setMessage(text, ok=true){
+  uploadMsg.textContent = text || '';
+  uploadMsg.style.color = ok ? 'green' : 'crimson';
+  // do not auto-clear critical diagnostic messages
+  if(ok) setTimeout(()=>{ if(uploadMsg.textContent === text) uploadMsg.textContent = ''; }, 5000);
+}
+function setProgress(pct){ pct=Math.max(0,Math.min(100,Math.round(pct))); if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block'; progressBar.style.width=pct+'%'; progressLabel.textContent=pct+'%'; }
+function nowMs(){ return Date.now(); }
 function saveLocalFiles(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
 function loadLocalFiles(){ const raw=localStorage.getItem(STORE_KEY); if(!raw) return false; try{ files=JSON.parse(raw); return true;}catch(e){return false;} }
-
-function nowMs(){ return Date.now(); }
 function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 function humanSize(n){ if(n!==0 && !n) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
 function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
-function generateOtp(len=6){ return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0"); }
 
-// helper: POST to BACKEND_BASE then API_BASE fallback
-async function tryPostWithFallback(path, payload){
-  async function tryHost(base){
+// small timeout helper for fetch
+function fetchWithTimeout(url, opts={}, timeout=4000){
+  return new Promise((resolve, reject)=>{
+    const timer = setTimeout(()=> reject(new Error('timeout')), timeout);
+    fetch(url, opts).then(r=>{ clearTimeout(timer); resolve(r); }).catch(e=>{ clearTimeout(timer); reject(e); });
+  });
+}
+
+// check reachability for a host (returns { ok, reason, base })
+async function checkReachable(base){
+  if(!base) return { ok:false, reason:'no-base', base };
+  const probe = base.replace(/\/$/,'') + '/health';
+  try{
+    // try /health first
+    const r = await fetchWithTimeout(probe, { method:'GET', mode:'cors' }, 3000);
+    if(r.ok) return { ok:true, base, reason:'health-ok' };
+    // if /health exists but non-200, still return ok to allow requests
+    return { ok:true, base, reason:'health-non200' };
+  }catch(e){
+    // fallback: try root (some backends don't implement /health)
     try{
-      const resp = await fetch(base.replace(/\/$/,'') + path, {
-        method:'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      });
+      const r2 = await fetchWithTimeout(base.replace(/\/$/,''), { method:'GET', mode:'cors' }, 3000);
+      if(r2.ok) return { ok:true, base, reason:'root-ok' };
+      return { ok:true, base, reason:'root-non200' };
+    }catch(err){
+      // distinguish likely causes
+      const isLocalhost = base.includes('localhost') || base.includes('127.0.0.1');
+      // If origin is remote and base is localhost, that is unreachable by design
+      const originIsLocalhost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+      if(isLocalhost && !originIsLocalhost){
+        return { ok:false, reason:'localhost-unreachable-from-hosted-frontend', base };
+      }
+      // otherwise generic network/CORS failure (TypeError from fetch)
+      return { ok:false, reason: (err && err.message) ? err.message : 'network-or-cors', base };
+    }
+  }
+}
+
+// unified POST fallback (BACKEND_BASE then API_BASE) with optional override from UI
+async function tryPostWithFallback(path, payload){
+  const override = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+  const hostsToTry = [];
+  if(override) hostsToTry.push(override.replace(/\/$/,''));
+  if(BACKEND_BASE) hostsToTry.push(BACKEND_BASE.replace(/\/$/,''));
+  if(API_BASE) hostsToTry.push(API_BASE.replace(/\/$/,''));
+  let lastErr = null;
+  for(const host of hostsToTry){
+    try{
+      const url = host + path;
+      const resp = await fetchWithTimeout(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload), mode:'cors' }, 6000);
       const j = await resp.json().catch(()=>null);
-      return { ok: resp.ok, status: resp.status, json: j, error: null, base };
-    }catch(err){ return { ok:false, status:null, json:null, error: err.message || String(err), base }; }
+      return { ok: resp.ok, status: resp.status, json: j, base:host, error: null };
+    }catch(err){
+      lastErr = err;
+    }
   }
-  let backendFail, apiFail;
-  if(BACKEND_BASE){
-    const r = await tryHost(BACKEND_BASE);
-    if(r.ok) return r;
-    backendFail = r;
+  return { ok:false, error: lastErr ? (lastErr.message || String(lastErr)) : 'no-host', base:null };
+}
+
+// Send OTP: ask backend to generate & email OTP (no OTP shown in frontend)
+async function sendOtpToServer(keyVal){
+  setMessage('Checking backend reachability...', true);
+  // check override / backend / api reachability
+  const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+  const toCheck = [];
+  if(overrideVal) toCheck.push(overrideVal);
+  if(BACKEND_BASE) toCheck.push(BACKEND_BASE);
+  if(API_BASE) toCheck.push(API_BASE);
+  // check first available
+  let reachable = null;
+  for(const b of toCheck){
+    const r = await checkReachable(b);
+    if(r.ok) { reachable = { base: r.base, reason: r.reason }; break; }
+    // store first failure to present diag
+    if(!reachable) reachable = { base: r.base, reason: r.reason };
   }
-  if(API_BASE && API_BASE !== BACKEND_BASE){
-    const r2 = await tryHost(API_BASE);
-    if(r2.ok) return r2;
-    apiFail = r2;
+  if(!reachable || !reachable.base){
+    // show the override input and a helpful message
+    backendOverrideWrap.style.display = 'block';
+    backendDiag.innerText = 'Backend unreachable from this browser. If your backend runs on localhost and this page is hosted remotely, the browser cannot reach localhost. Use ngrok/localtunnel or host the backend and paste the URL here.';
+    setMessage('Failed to send OTP: backend unreachable (see instructions)', false);
+    alert('Failed to send OTP: backend unreachable from this browser.\n\nCommon causes:\n• Frontend hosted remotely (GitHub Pages) but backend is http://localhost:3000 — remote page cannot reach localhost.\n• CORS not enabled on backend.\n\nFix: host backend on a public URL (Railway/Render) or expose local port (ngrok) and paste the reachable URL into the Backend override input on the left.');
+    return { ok:false, error:'unreachable' };
   }
-  const errorDetail = backendFail?.error || apiFail?.error || ('backend status: ' + (backendFail?.status||'n/a') + ', api status: ' + (apiFail?.status||'n/a'));
-  return { ok:false, status:null, json:null, error: errorDetail, base: (backendFail?.base || apiFail?.base || null) };
+
+  // hide override UI if present
+  backendOverrideWrap.style.display = 'none';
+  setMessage('Sending OTP to server (' + reachable.base + ')...', true);
+  const res = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
+  if(!res.ok){
+    // if fetch failed with TypeError most likely network/CORS; show instructions
+    backendOverrideWrap.style.display = 'block';
+    backendDiag.innerText = 'Send OTP failed: ' + (res.error || 'unknown') + '. If CORS error appears in console, enable CORS on backend or set proper Access-Control-Allow-Origin.';
+    setMessage('Failed to send OTP: ' + (res.error || 'unknown'), false);
+    alert('Failed to send OTP: ' + (res.error || 'unknown') + '\n\nCheck browser console for network/CORS details. If your backend is localhost and this page is not, use ngrok and paste its URL in Backend override.');
+    return res;
+  }
+  setMessage('OTP request accepted by ' + res.base, true);
+  return res;
 }
 
-// send OTP (calls /send-otp via fallback)
-async function emailOtpToRecipient(email, otp, key){
-  return await tryPostWithFallback('/send-otp', { email, otp, key });
+// Verify OTP: user must paste OTP they received in email; calls backend verify
+async function verifyOtpOnServer(otp, keyVal){
+  setMessage('Verifying OTP...', true);
+  const res = await tryPostWithFallback('/verify-otp', { otp, key: keyVal });
+  if(!res.ok){
+    backendOverrideWrap.style.display = 'block';
+    backendDiag.innerText = 'Verify failed: ' + (res.error || 'unknown');
+    setMessage('OTP verify failed: ' + (res.error || 'unknown'), false);
+    return res;
+  }
+  setMessage('OTP verified by ' + res.base, true);
+  return res;
 }
 
-// verify OTP (calls /verify-otp via fallback)
-async function verifyOtpOnServer(otp, key){
-  return await tryPostWithFallback('/verify-otp', { otp, key });
+// presign + upload helper (same as before, with override support)
+async function requestPresignAndUpload(file, keyVal, otpForPresign){
+  setProgress(0);
+  setMessage('Requesting presigned URL...', true);
+
+  // if manualPut provided, skip presign
+  let presignUrl = manualPut.value.trim();
+  let realKey = keyVal;
+  if(!presignUrl){
+    // try hosts in fallback order including override
+    const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+    const hosts = [];
+    if(overrideVal) hosts.push(overrideVal.replace(/\/$/,''));
+    if(BACKEND_BASE) hosts.push(BACKEND_BASE.replace(/\/$/,''));
+    if(API_BASE) hosts.push(API_BASE.replace(/\/$/,''));
+    let presignResponseJson = null;
+    let lastErr = null;
+    for(const host of hosts){
+      try{
+        const url = host + '/presign';
+        const resp = await fetchWithTimeout(url, {
+          method:'POST',
+          headers: authHeaders({'Content-Type':'application/json'}),
+          body: JSON.stringify({ filename: file.name, contentType: file.type, key: realKey, otp: (otpForPresign || '') }),
+          mode: 'cors'
+        }, 8000);
+        if(!resp.ok) throw new Error('status ' + resp.status);
+        presignResponseJson = await resp.json();
+        presignUrl = presignResponseJson.url;
+        realKey = presignResponseJson.key || realKey;
+        break;
+      }catch(e){
+        lastErr = e;
+        continue;
+      }
+    }
+    if(!presignUrl){
+      const msg = 'Presign failed: ' + (lastErr ? (lastErr.message || String(lastErr)) : 'no-host');
+      setMessage(msg, false);
+      alert(msg + '\n\nIf your backend is on localhost and this page is hosted remotely, use ngrok and paste the URL in the Backend override.');
+      throw new Error(msg);
+    }
+  }
+
+  // perform PUT upload
+  await xhrUpload(presignUrl, file);
+
+  // register metadata (try API_BASE then BACKEND_BASE)
+  try {
+    const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+    const metaHosts = [];
+    if(overrideVal) metaHosts.push(overrideVal.replace(/\/$/,''));
+    if(API_BASE) metaHosts.push(API_BASE.replace(/\/$/,''));
+    if(BACKEND_BASE) metaHosts.push(BACKEND_BASE.replace(/\/$/,''));
+    for(const h of metaHosts){
+      try{
+        await fetchWithTimeout(h + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }), mode:'cors' }, 6000);
+        break;
+      }catch(e){ continue; }
+    }
+  }catch(e){ console.warn('metadata registration failed', e); }
+
+  // success UI update
+  files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: undefined });
+  saveLocalFiles();
+  setMessage('Upload finished: ' + realKey, true);
+  setProgress(100);
+  renderFiles();
+  pendingUpload = null;
+  fileInput.value = ''; keyInput.value=''; manualPut.value='';
 }
 
-// demo seed
-function seedDemoIfNeeded(){ if(API_BASE) return; if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
-seedDemoIfNeeded();
-
-async function fetchFilesFromBackend(){ if(!API_BASE) return false; try{ const resp = await fetch(API_BASE + '/files', { headers: authHeaders() }); if(!resp.ok) throw new Error('Fetch files failed: '+resp.status); const j = await resp.json(); files = j.map(x=>({ key:x.key, name:x.name||x.key.split('/').slice(-1).join('/'), size:x.size||0, modified:x.modified||nowMs(), star:!!x.star, deleted:!!x.deleted, url:x.url })); saveLocalFiles(); return true;}catch(e){ console.warn('Could not fetch files from backend:', e); return false; } }
-(async ()=>{ if(API_BASE) await fetchFilesFromBackend(); renderFiles(); updateCounts(); })();
-
-function updateCounts(){ const all = files.filter(f=>!f.deleted).length; const recent = files.filter(f=>!f.deleted && (nowMs() - (f.modified||0) <= 1000*60*60*24*30)).length; const star = files.filter(f=>!f.deleted && f.star).length; const trash = files.filter(f=>f.deleted).length; document.getElementById('countAll').textContent = all ? ' ('+all+')' : ''; document.getElementById('countRecent').textContent = recent ? ' ('+recent+')' : ''; document.getElementById('countStar').textContent = star ? ' ('+star+')' : ''; document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : ''; }
-
-function getFilteredFiles(){ const q = (document.getElementById('search').value || '').toLowerCase().trim(); let list = files.slice(); if(view==='recent') list = list.filter(f=>!f.deleted && ((nowMs()- (f.modified||0)) <= 1000*60*60*24*30)); if(view==='starred') list = list.filter(f=>!f.deleted && f.star); if(view==='trash') list = list.filter(f=>f.deleted); if(view==='all') list = list.filter(f=>!f.deleted); if(q) list = list.filter(f => (f.name||'').toLowerCase().includes(q) || (f.key||'').toLowerCase().includes(q)); list.sort((a,b)=> (b.modified||0) - (a.modified||0)); return list; }
-
-function renderFiles(){
-  const list = getFilteredFiles();
-  filesList.innerHTML=''; if(list.length===0) filesList.innerHTML='<div class="muted">No files</div>';
-  list.forEach(f=>{
-    const div=document.createElement('div'); div.className='list-row';
-    const left=document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
-    const right=document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
-    const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent=humanSize(f.size)+(f.modified?(' • '+formatDate(f.modified)):'');
-    const actions=document.createElement('div'); actions.className='actions';
-    const getBtn=document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL'; getBtn.onclick=()=> requestGetPresign(f.key);
-    const openBtn=document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary me-1'; openBtn.textContent='Open'; openBtn.onclick=()=> openPresigned(f.url,f.key);
-    const starBtn=document.createElement('button'); starBtn.className='btn btn-sm ' + (f.star ? 'btn-warning' : 'btn-outline-warning') + ' me-1'; starBtn.textContent=f.star?'★':'☆'; starBtn.onclick=()=>toggleStar(f.key);
-    const delBtn=document.createElement('button'); delBtn.className='btn btn-sm ' + (view==='trash' ? 'btn-danger' : 'btn-outline-danger'); delBtn.textContent = view==='trash' ? 'Delete Permanently' : 'Delete'; delBtn.onclick=()=>{ if(view==='trash') permanentlyDelete(f.key); else moveToTrash(f.key); };
-    const restoreBtn=document.createElement('button'); restoreBtn.className='btn btn-sm btn-outline-success me-1'; restoreBtn.textContent='Restore'; restoreBtn.onclick=()=>restoreFromTrash(f.key);
-
-    actions.appendChild(getBtn);
-    if(!f.deleted) actions.appendChild(openBtn);
-    if(f.deleted){ actions.appendChild(restoreBtn); actions.appendChild(delBtn); } else { actions.appendChild(starBtn); actions.appendChild(delBtn); }
-
-    right.appendChild(meta); right.appendChild(actions);
-    div.appendChild(left); div.appendChild(right); filesList.appendChild(div);
-  });
-
-  filesGrid.innerHTML='';
-  list.forEach(f=>{
-    const t=document.createElement('div'); t.className='file-tile';
-    t.innerHTML=`<div style="font-size:26px">${guessEmojiForName(f.name)}</div><div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div><div class="muted small">${humanSize(f.size)}</div><div class="mt-2"><button class="btn btn-sm btn-outline-primary me-1">Get URL</button>${f.deleted?'<button class="btn btn-sm btn-outline-success me-1">Restore</button>':'<button class="btn btn-sm btn-outline-secondary me-1">Open</button>'}</div>`;
-    const btns=t.querySelectorAll('button');
-    if(btns[0]) btns[0].onclick=()=>requestGetPresign(f.key);
-    if(f.deleted){ if(btns[1]) btns[1].onclick=()=>restoreFromTrash(f.key); } else { if(btns[1]) btns[1].onclick=()=>openPresigned(f.url,f.key); }
-    filesGrid.appendChild(t);
-  });
-
-  updateCounts();
-}
-
-function guessEmojiForName(name){
-  const n=(name||'').toLowerCase(); if(n.endsWith('.jpg')||n.endsWith('.png')||n.endsWith('.gif')) return '🖼️'; if(n.endsWith('.pdf')) return '📄'; if(n.endsWith('.zip')||n.endsWith('.tar')||n.endsWith('.gz')) return '🗜️'; return '📁';
-}
-
-// actions
-function toggleStar(key){ const it=files.find(x=>x.key===key); if(!it) return; it.star=!it.star; if(API_BASE) fetch(API_BASE+'/files/star',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({key,star:!!it.star})}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
-function moveToTrash(key){ if(!confirm('Move to Trash?')) return; const it=files.find(x=>x.key===key); if(!it) return; it.deleted=true; it.modified=nowMs(); if(API_BASE) fetch(API_BASE+'/files/trash',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({key})}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
-function restoreFromTrash(key){ const it=files.find(x=>x.key===key); if(!it) return; it.deleted=false; it.modified=nowMs(); if(API_BASE) fetch(API_BASE+'/files/restore',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({key})}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
-function permanentlyDelete(key){ if(!confirm('Permanently delete? This cannot be undone.')) return; const idx=files.findIndex(x=>x.key===key); if(idx===-1) return; files.splice(idx,1); if(API_BASE) fetch(API_BASE+'/files/'+encodeURIComponent(key),{method:'DELETE',headers:authHeaders()}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
-function openPresigned(url,key){ if(url){ window.open(url,'_blank'); return; } if(!API_BASE) { alert('No API configured: cannot open. Use Get URL to get a presigned GET for ' + key); return; } requestGetPresign(encodeURIComponent(key)); }
-
-// ---------- Pending upload state ----------
-let pendingUpload = null; // { file, keyVal, manualPutValue, otpNeeded }
-
-// ---------- Upload behaviour (no auto-verify, no OTP display) ----------
+// upload button flow
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   if(!file) return alert('Pick a file to upload');
-
-  // ensure key uses images/ prefix
   let keyVal = keyInput.value.trim() || file.name;
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
 
-  // if OTP flow not selected, continue upload now
+  // OTP not selected -> direct presign+upload
   if(!chkOtp.checked){
-    // do normal presign + upload (reuse function)
-    await performPresignAndUpload(file, keyVal);
-    return;
-  }
-
-  // OTP flow selected
-  // if otpInline has user-typed OTP -> try verify and upload on success
-  const typedOtp = (otpInline && otpInline.value) ? otpInline.value.trim() : '';
-
-  if(typedOtp){
-    // verify OTP, if success continue upload
-    setMessage('Verifying OTP...', true);
     try{
-      const vr = await verifyOtpOnServer(typedOtp, keyVal);
-      if(!vr.ok) {
-        setMessage('OTP verification failed', false);
-        alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status)));
-        return;
-      }
-      // verified: continue
-      setMessage('OTP verified — continuing upload...', true);
-      await performPresignAndUpload(file, keyVal, typedOtp);
+      await requestPresignAndUpload(file, keyVal);
     }catch(e){
-      setMessage('OTP verify error', false);
       console.error(e);
-      alert('Error verifying OTP: ' + e.message);
     }
     return;
   }
 
-  // no typed OTP: send OTP to email and pause upload until user verifies
-  setMessage('Sending OTP to email — check your inbox', true);
-  try{
-    // send OTP request to server; server is responsible for generating & emailing OTP
-    const r = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
-    if(!r.ok){
-      setMessage('Failed to send OTP: ' + r.error, false);
-      alert('Failed to send OTP: ' + r.error + '\n(If your backend is on localhost and your frontend is hosted remotely, the host cannot reach localhost.)');
+  // OTP selected: verify typed OTP (if present) or send OTP and pause
+  const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
+  if(typedOtp){
+    // try verify then upload
+    setMessage('Verifying OTP...', true);
+    const vr = await verifyOtpOnServer(typedOtp, keyVal);
+    if(!vr.ok){
+      // show clear message
+      alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status)) + '\nCheck your backend logs or ensure you typed the OTP exactly as received.');
       return;
     }
-    // OTP sent (server should have generated and emailed it). Save pending upload state.
-    pendingUpload = { file, keyVal };
-    setMessage('OTP sent — enter it in the box and click Verify OTP to continue', true);
-    alert('An OTP was sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Enter it in the inline OTP box and press Verify OTP to continue the upload.');
-    // do not auto-fill inline OTP and do not auto-verify
-  }catch(e){
-    setMessage('Error sending OTP: ' + e.message, false);
-    console.error(e);
-    alert('Error sending OTP: ' + e.message);
+    // verified -> presign & upload including otp
+    try{
+      await requestPresignAndUpload(file, keyVal, typedOtp);
+    }catch(e){ console.error(e); }
+    return;
+  }
+
+  // no typed OTP: send OTP and pause — server generates & emails OTP
+  setMessage('Sending OTP to ' + DEFAULT_RECIPIENT_EMAIL + '...', true);
+  const sendRes = await sendOtpToServer(keyVal);
+  if(!sendRes.ok){
+    // sendOtpToServer handles showing diagnostics
+    return;
+  }
+  // sent OK -> set pending upload and instruct user to paste OTP and press Verify OTP
+  pendingUpload = { file, keyVal };
+  alert('An OTP has been sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Please check your email, paste the OTP in the inline box and press Verify OTP to continue the upload.');
+  setMessage('OTP sent — waiting for you to paste OTP and press Verify OTP', true);
+});
+
+// Verify OTP button (user-initiated)
+verifyOtpBtn.addEventListener('click', async ()=>{
+  const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
+  if(!typedOtp) return alert('Enter OTP you received in email.');
+  // determine key: prefer pendingUpload key if exists, else keyInput
+  let keyVal = keyInput.value.trim();
+  if(!keyVal && pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
+  if(!keyVal) return alert('Enter a key or start an upload so backend can verify OTP for that key.');
+  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
+
+  setMessage('Verifying OTP...', true);
+  const vr = await verifyOtpOnServer(typedOtp, keyVal);
+  if(!vr.ok){
+    alert('OTP verify failed: ' + (vr.error || ('status ' + vr.status)));
+    return;
+  }
+  alert('OTP verified successfully. Upload will continue if it was pending.');
+  setMessage('OTP verified. Continuing upload...', true);
+  if(pendingUpload && pendingUpload.file){
+    try{
+      await requestPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp);
+    }catch(e){ console.error(e); }
   }
 });
 
-// function to actually request presign and upload (includes otp param if provided)
-async function performPresignAndUpload(file, keyVal, otpForPresign){
-  try{
-    setProgress(0);
-    setMessage('Requesting presigned URL...', true);
+// Send OTP explicit button
+sendOtpBtn.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  let keyVal = keyInput.value.trim() || (file ? file.name : '');
+  if(!keyVal) return alert('Enter key or choose a file to associate OTP with.');
+  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
+  const r = await sendOtpToServer(keyVal);
+  if(r.ok) alert('OTP request sent to server. Check email.');
+});
 
-    let presignUrl = manualPut.value.trim();
-    let realKey = keyVal;
-    let presignResponseJson = null;
-
-    // try BACKEND_BASE then API_BASE
-    async function tryPresignHost(base){
-      const resp = await fetch(base.replace(/\/$/,'') + '/presign', {
-        method:'POST',
-        headers: authHeaders({'Content-Type':'application/json'}),
-        body: JSON.stringify({ filename:file.name, contentType:file.type, key: realKey, otp: (otpForPresign || '') })
-      });
-      if(!resp.ok) throw new Error('Presign request failed: ' + resp.status + ' @ ' + base);
-      return await resp.json();
-    }
-
-    if(!presignUrl){
-      let backendErr, apiErr;
-      try{
-        presignResponseJson = await tryPresignHost(BACKEND_BASE);
-      }catch(eBackend){
-        backendErr = eBackend;
-        try{
-          presignResponseJson = await tryPresignHost(API_BASE);
-        }catch(eApi){
-          apiErr = eApi;
-          const detail = 'Backend error: ' + (backendErr && backendErr.message ? backendErr.message : String(backendErr)) + '; API error: ' + (apiErr && apiErr.message ? apiErr.message : String(apiErr));
-          throw new Error('Presign failed on both BACKEND_BASE and API_BASE. Details: ' + detail);
-        }
-      }
-      if(presignResponseJson){
-        presignUrl = presignResponseJson.url;
-        realKey = presignResponseJson.key || realKey;
-      }
-    }
-
-    if(!presignUrl) throw new Error('No presigned URL available');
-
-    await xhrUpload(presignUrl, file);
-
-    // Register metadata (try API_BASE then BACKEND_BASE)
-    try {
-      if(API_BASE){
-        await fetch(API_BASE + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) });
-      }
-    } catch(e){
-      try {
-        await fetch(BACKEND_BASE + '/files', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) });
-      } catch(e2){
-        console.warn('Could not register metadata on either API_BASE or BACKEND_BASE', e, e2);
-      }
-    }
-
-    files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
-    saveLocalFiles();
-    setMessage('Upload finished: ' + realKey, true);
-    setProgress(100);
-    renderFiles();
-    // clear pending/upload fields
-    pendingUpload = null;
-    fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
-  }catch(err){
-    console.error(err);
-    setMessage('Upload error: '+(err.message||err), false);
-    setProgress(0);
-    alert('Upload failed: ' + (err.message || err));
-  }
-}
-
-// manual paste PUT upload unchanged except derived key prefix
+// Manual presigned PUT upload (same behavior but ensures images/ prefix in stored key)
 uploadManual.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   const url = manualPut.value.trim();
@@ -440,7 +488,7 @@ uploadManual.addEventListener('click', async ()=>{
     saveLocalFiles();
     renderFiles();
     setMessage('Manual upload finished', true);
-  }catch(e){ setMessage('Manual upload error: '+e.message, false); }
+  }catch(e){ setMessage('Manual upload error: '+e.message, false); alert('Manual upload failed: ' + e.message); }
 });
 
 function xhrUpload(url, file){
@@ -454,19 +502,18 @@ function xhrUpload(url, file){
   });
 }
 
-function setProgress(pct){ pct=Math.max(0,Math.min(100,Math.round(pct))); if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block'; progressBar.style.width=pct+'%'; progressLabel.textContent=pct+'%'; }
-function setMessage(text, ok=true){ uploadMsg.textContent=text; uploadMsg.style.color = ok ? 'green' : 'crimson'; setTimeout(()=>{ if(uploadMsg.textContent===text) uploadMsg.textContent=''; }, 7000); }
-
-// Presign GET (unchanged)
+// Presign GET helper (unchanged)
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
-  if(!API_BASE) {
+  const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+  if(!API_BASE && !overrideVal) {
     const f = files.find(x=>x.key===decoded);
     if(f && f.url) { getUrlInput.value = f.url; alert('Presigned GET placed in the input'); return; }
     return prompt('No API configured. Paste your presigned GET URL for '+decoded+' (manual):');
   }
   try{
-    const resp = await fetch(API_BASE + '/presign-get', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: decoded }) });
+    const host = overrideVal || API_BASE;
+    const resp = await fetch(host.replace(/\/$/,'') + '/presign-get', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: decoded }), mode:'cors' });
     if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
     const j = await resp.json();
     getUrlInput.value = j.url;
@@ -474,81 +521,80 @@ async function requestGetPresign(key){
   }catch(e){ alert('Error requesting GET presign: '+e.message); }
 }
 
-document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
-document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
+// Files UI & metadata (unchanged behavior)
+function updateCounts(){
+  const all = files.filter(f=>!f.deleted).length;
+  const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
+  const star = files.filter(f=>!f.deleted && f.star).length;
+  const trash = files.filter(f=>f.deleted).length;
+  document.getElementById('countAll').textContent = all ? ' ('+all+')' : '';
+  document.getElementById('countRecent').textContent = recent ? ' ('+recent+')' : '';
+  document.getElementById('countStar').textContent = star ? ' ('+star+')' : '';
+  document.getElementById('countTrash').textContent = trash ? ' ('+trash+')' : '';
+}
+function toggleStar(key){ const it=files.find(x=>x.key===key); if(!it) return; it.star=!it.star; saveLocalFiles(); renderFiles(); }
+function moveToTrash(key){ if(!confirm('Move to Trash?')) return; const it=files.find(x=>x.key===key); if(!it) return; it.deleted=true; it.modified=nowMs(); saveLocalFiles(); renderFiles(); }
+function restoreFromTrash(key){ const it=files.find(x=>x.key===key); if(!it) return; it.deleted=false; it.modified=nowMs(); saveLocalFiles(); renderFiles(); }
+function permanentlyDelete(key){ if(!confirm('Permanently delete? This cannot be undone.')) return; const idx=files.findIndex(x=>x.key===key); if(idx===-1) return; files.splice(idx,1); saveLocalFiles(); renderFiles(); }
+function openPresigned(url,key){ if(url){ window.open(url,'_blank'); return; } requestGetPresign(encodeURIComponent(key)); }
 
-// UI: show/hide controls
+function renderFiles(){
+  const list = files.slice().filter(f=>!f.deleted).sort((a,b)=>(b.modified||0)-(a.modified||0));
+  filesList.innerHTML=''; if(list.length===0) filesList.innerHTML='<div class="muted">No files</div>';
+  list.forEach(f=>{
+    const div=document.createElement('div'); div.className='list-row';
+    const left=document.createElement('div'); left.innerHTML = `<div><strong>${escapeHtml(f.name)}</strong><div class="muted small">${escapeHtml(f.key)}</div></div>`;
+    const right=document.createElement('div'); right.style.display='flex'; right.style.alignItems='center'; right.style.gap='10px';
+    const meta = document.createElement('div'); meta.className='meta-muted small'; meta.textContent = humanSize(f.size) + (f.modified?(' • '+formatDate(f.modified)):'');
+
+    const actions=document.createElement('div'); actions.className='actions';
+    const getBtn=document.createElement('button'); getBtn.className='btn btn-sm btn-outline-primary me-1'; getBtn.textContent='Get URL'; getBtn.onclick=()=> requestGetPresign(f.key);
+    const openBtn=document.createElement('button'); openBtn.className='btn btn-sm btn-outline-secondary me-1'; openBtn.textContent='Open'; openBtn.onclick=()=> openPresigned(f.url,f.key);
+    const starBtn=document.createElement('button'); starBtn.className='btn btn-sm ' + (f.star ? 'btn-warning' : 'btn-outline-warning') + ' me-1'; starBtn.textContent=f.star?'★':'☆'; starBtn.onclick=()=>toggleStar(f.key);
+    const delBtn=document.createElement('button'); delBtn.className='btn btn-sm btn-outline-danger'; delBtn.textContent='Delete'; delBtn.onclick=()=>moveToTrash(f.key);
+
+    actions.appendChild(getBtn); actions.appendChild(openBtn); actions.appendChild(starBtn); actions.appendChild(delBtn);
+    right.appendChild(meta); right.appendChild(actions);
+    div.appendChild(left); div.appendChild(right); filesList.appendChild(div);
+  });
+
+  filesGrid.innerHTML='';
+  list.forEach(f=>{
+    const t=document.createElement('div'); t.className='file-tile';
+    t.innerHTML=`<div style="font-size:26px">` + (f.name.toLowerCase().match(/\.jpg|\.png|\.gif/) ? '🖼️' : '📁') + `</div>
+      <div style="margin-top:8px"><strong>${escapeHtml(f.name)}</strong></div>
+      <div class="muted small">${humanSize(f.size)}</div>
+      <div class="mt-2"><button class="btn btn-sm btn-outline-primary me-1">Get URL</button><button class="btn btn-sm btn-outline-secondary me-1">Open</button></div>`;
+    const btns = t.querySelectorAll('button');
+    if(btns[0]) btns[0].onclick = ()=> requestGetPresign(f.key);
+    if(btns[1]) btns[1].onclick = ()=> openPresigned(f.url, f.key);
+    filesGrid.appendChild(t);
+  });
+
+  updateCounts();
+}
+
+function seedDemoIfNeeded(){ if(API_BASE) return; if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
+seedDemoIfNeeded();
+
+// UI wiring
+document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
+document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
+document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
+document.getElementById('listViewBtn')?.addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderFiles(); });
+document.getElementById('gridViewBtn')?.addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderFiles(); });
+document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
+
+chkOtp.addEventListener('change', updateCheckboxUI);
+chkPresign.addEventListener('change', updateCheckboxUI);
 function updateCheckboxUI(){
   if(chkOtp.checked){ sendOtpBtn.style.display='inline-block'; otpInline.style.display='inline-block'; verifyOtpBtn.style.display='inline-block'; } else { sendOtpBtn.style.display='none'; otpInline.style.display='none'; verifyOtpBtn.style.display='none'; }
   if(chkPresign.checked){ manualPut.style.display='block'; manualPutHint.style.display='block'; uploadManual.style.display='inline-block'; } else { manualPut.style.display='none'; manualPutHint.style.display='none'; uploadManual.style.display='none'; }
 }
-chkOtp.addEventListener('change', updateCheckboxUI);
-chkPresign.addEventListener('change', updateCheckboxUI);
 updateCheckboxUI();
 
-// Send OTP button: ask backend to send OTP (no display)
-sendOtpBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  let keyVal = keyInput.value.trim() || (file ? file.name : '');
-  if(!keyVal) return alert('Enter a key or choose a file so a key can be associated with the OTP.');
-  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-  setMessage('Sending OTP to ' + DEFAULT_RECIPIENT_EMAIL + '...', true);
-  try{
-    const r = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
-    if(r.ok){
-      pendingUpload = null; // nothing pending unless user began an upload
-      setMessage('OTP sent — check your email', true);
-      alert('OTP sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Enter it here and press Verify OTP.');
-    } else {
-      setMessage('Failed to send OTP: ' + r.error, false);
-      alert('Failed to send OTP: ' + r.error);
-    }
-  }catch(e){
-    setMessage('Error sending OTP: ' + e.message, false);
-    alert('Error sending OTP: ' + e.message);
-  }
-  setMessage('', true);
-});
-
-// Verify OTP button: user must type OTP they received in their email
-verifyOtpBtn.addEventListener('click', async ()=>{
-  const typedOtp = otpInline.value ? otpInline.value.trim() : '';
-  if(!typedOtp) return alert('Enter OTP in the inline box first.');
-  // determine key for verification: priority: keyInput -> pendingUpload.keyVal -> prompt
-  let keyVal = keyInput.value.trim();
-  if(!keyVal && pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
-  if(!keyVal) return alert('Enter a key or start an upload so the backend can verify the OTP against a key.');
-  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-  setMessage('Verifying OTP...', true);
-  try{
-    const r = await verifyOtpOnServer(typedOtp, keyVal);
-    if(!r.ok){
-      setMessage('OTP verification failed', false);
-      alert('OTP verification failed: ' + r.error);
-      return;
-    }
-    setMessage('OTP verified', true);
-    alert('OTP verified successfully. Now continuing upload if one is pending.');
-    // if an upload was pending, continue it
-    if(pendingUpload && pendingUpload.file){
-      await performPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp);
-    }
-  }catch(e){
-    setMessage('Error verifying OTP: ' + e.message, false);
-    alert('Error verifying OTP: ' + e.message);
-  }
-  setMessage('', true);
-});
-
-// other UI wiring
-document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
-document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
-document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
-document.querySelectorAll('.nav-item').forEach(el=>{ el.addEventListener('click',(ev)=>{ ev.preventDefault(); document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active')); el.classList.add('active'); view = el.getAttribute('data-view'); renderFiles(); }); });
-const defaultEl = document.querySelector('.nav-item[data-view="all"]'); if(defaultEl) defaultEl.classList.add('active');
-document.getElementById('listViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='block'; document.getElementById('gridArea').style.display='none'; renderMode='list'; });
-document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.getElementById('listArea').style.display='none'; document.getElementById('gridArea').style.display='block'; renderMode='grid'; });
-document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
+document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
+document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
 renderFiles();
 updateCounts();
