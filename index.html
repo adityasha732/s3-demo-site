@@ -239,14 +239,45 @@ function generateOtp(len=6){
 }
 
 // NEW: call backend to send OTP email
+// This function will try BACKEND_BASE first, then fallback to API_BASE if BACKEND_BASE is unreachable or returns non-OK.
+// It returns an object: { ok: boolean, which: 'backend'|'api'|'none', status: number|null, error: string|null, json: any|null }
 async function emailOtpToRecipient(backendBase, email, otp, key){
-  const resp = await fetch(backendBase + '/send-otp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, otp, key })
-  });
-  const j = await resp.json().catch(()=>({}));
-  return { ok: resp.ok, json: j };
+  const payload = { email, otp, key };
+  const headers = { 'Content-Type': 'application/json' };
+
+  // helper to attempt a single host
+  async function tryHost(base){
+    try{
+      const resp = await fetch(base.replace(/\/$/,'') + '/send-otp', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      const j = await resp.json().catch(()=>null);
+      return { ok: resp.ok, status: resp.status, json: j, error: null };
+    }catch(err){
+      return { ok: false, status: null, json: null, error: err.message || String(err) };
+    }
+  }
+
+  // 1) Try BACKEND_BASE if provided and non-empty
+  if(backendBase){
+    const r = await tryHost(backendBase);
+    if(r.ok) return { ok:true, which:'backend', status:r.status, json:r.json, error:null };
+    // remember reason but continue to fallback
+    var backendFail = r;
+  }
+
+  // 2) Try API_BASE as fallback (useful when BACKEND_BASE is localhost and not reachable from hosted frontend)
+  if(API_BASE && API_BASE !== backendBase){
+    const r2 = await tryHost(API_BASE);
+    if(r2.ok) return { ok:true, which:'api', status:r2.status, json:r2.json, error:null };
+    var apiFail = r2;
+  }
+
+  // 3) neither worked
+  const errorDetail = backendFail?.error || apiFail?.error || ('backend status: ' + (backendFail?.status||'n/a') + ', api status: ' + (apiFail?.status||'n/a'));
+  return { ok:false, which:'none', status:null, json:null, error: errorDetail };
 }
 
 // ---------- Demo seed (if no backend and no saved data) ----------
@@ -528,16 +559,16 @@ uploadBtn.addEventListener('click', async ()=>{
     let otpToUse = manualOtp || generateOtp(6);
     const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
 
-    if(!BACKEND_BASE){
+    if(!BACKEND_BASE && !API_BASE){
       // demo mode – cannot send email
       alert('Upload complete.\nOTP: ' + otpToUse + '\n(No email backend configured.)');
     } else if(email){
       try{
         const r = await emailOtpToRecipient(BACKEND_BASE, email, otpToUse, realKey);
         if(r.ok){
-          alert('OTP ' + otpToUse + ' sent to ' + email);
+          alert('OTP ' + otpToUse + ' sent to ' + email + ' (via ' + r.which + ')');
         } else {
-          alert('Upload complete.\nOTP: ' + otpToUse + '\nEmail sending failed. Check backend.');
+          alert('Upload complete.\nOTP: ' + otpToUse + '\nEmail sending failed. Details: ' + (r.error || 'unknown'));
         }
       }catch(e){
         alert('Upload complete.\nOTP: ' + otpToUse + '\nError while sending email: ' + e.message);
