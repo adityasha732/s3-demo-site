@@ -31,6 +31,7 @@
     .meta-muted { color:#94a3b8; font-size:.85rem; }
     .btn-outline-warning { color: #b45309; border-color:#fbbf24; }
     .otp-row { margin-top:12px; }
+    .small-checkbox { margin-right:10px; display:inline-flex; align-items:center; gap:6px; }
   </style>
 </head>
 <body>
@@ -116,13 +117,25 @@
           </div>
         </div>
 
+        <!-- New checkboxes for OTP / Presigned upload -->
+        <div class="row g-2 mt-3">
+          <div class="col-12">
+            <label class="small-checkbox"><input type="checkbox" id="chkOtp"> Use OTP</label>
+            <label class="small-checkbox"><input type="checkbox" id="chkPresign"> Use Presigned URL</label>
+
+            <!-- Send OTP button (hidden unless chkOtp checked) -->
+            <button id="sendOtpBtn" class="btn btn-sm btn-outline-primary ms-2" style="display:none">Send OTP</button>
+          </div>
+        </div>
+
         <div class="row g-2 mt-3">
           <div class="col-md-8">
-            <input id="manualPut" class="form-control form-control-sm" placeholder="(Fallback) paste presigned PUT URL here">
-            <div class="muted small mt-1">If you have a Java app that generates a presigned PUT URL, paste it here and click "Upload using PUT".</div>
+            <!-- manualPut was already present — keep it but hide/show based on checkbox -->
+            <input id="manualPut" class="form-control form-control-sm" placeholder="(Fallback) paste presigned PUT URL here" style="display:none">
+            <div class="muted small mt-1" id="manualPutHint" style="display:none">If you have a Java app that generates a presigned PUT URL, paste it here and click "Upload using PUT".</div>
           </div>
           <div class="col-md-4 d-grid">
-            <button id="uploadManual" class="btn btn-outline-secondary btn-sm">Upload using pasted PUT URL</button>
+            <button id="uploadManual" class="btn btn-outline-secondary btn-sm" style="display:none">Upload using pasted PUT URL</button>
           </div>
         </div>
 
@@ -221,6 +234,11 @@ const getUrlInput = document.getElementById('getUrlInput');
 const manualOtpInput = document.getElementById('manualOtp');
 const applyOtpBtn = document.getElementById('applyOtpBtn');
 const recipientEmailInput = document.getElementById('recipientEmail');
+
+const chkOtp = document.getElementById('chkOtp');
+const chkPresign = document.getElementById('chkPresign');
+const sendOtpBtn = document.getElementById('sendOtpBtn');
+const manualPutHint = document.getElementById('manualPutHint');
 
 // ---------- Persistence ----------
 const STORE_KEY = 'cv_files_v1';
@@ -473,8 +491,6 @@ function openPresigned(url, key){
 }
 
 // ---------- Upload flows (+ OTP email) ----------
-// This upload flow first tries API_BASE + '/presign'. If that fails it will try BACKEND_BASE + '/presign' as fallback.
-// This is intentionally minimal and preserves your original behavior.
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   if(!file) return alert('Pick a file to upload');
@@ -670,6 +686,54 @@ applyOtpBtn.addEventListener('click', ()=>{
   const v = (manualOtpInput.value || '').trim();
   if(!v) return alert('Enter an OTP to apply');
   alert('Manual OTP applied for next upload/download: ' + v);
+});
+
+// ---------- Checkbox behavior: show/hide controls ----------
+function updateCheckboxUI(){
+  // OTP checkbox controls sendOtpBtn
+  if(chkOtp.checked){
+    sendOtpBtn.style.display = 'inline-block';
+  } else {
+    sendOtpBtn.style.display = 'none';
+  }
+
+  // Presigned checkbox controls manualPut & uploadManual
+  if(chkPresign.checked){
+    manualPut.style.display = 'block';
+    manualPutHint.style.display = 'block';
+    uploadManual.style.display = 'inline-block';
+  } else {
+    manualPut.style.display = 'none';
+    manualPutHint.style.display = 'none';
+    uploadManual.style.display = 'none';
+  }
+}
+chkOtp.addEventListener('change', updateCheckboxUI);
+chkPresign.addEventListener('change', updateCheckboxUI);
+updateCheckboxUI(); // initial
+
+// ---------- Send OTP button action (uses same emailOtpToRecipient logic) ----------
+sendOtpBtn.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  const keyVal = keyInput.value.trim() || (file ? file.name : '');
+  const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
+  if(!email) return alert('Set recipient email in the sidebar before sending OTP.');
+  if(!keyVal) return alert('Enter a key or choose a file so a key can be associated with the OTP.');
+
+  const otp = generateOtp(6);
+  try{
+    setMessage('Sending OTP...', true);
+    const r = await emailOtpToRecipient(BACKEND_BASE, email, otp, keyVal);
+    if(r.ok) {
+      alert('OTP ' + otp + ' sent to ' + email + ' (via ' + r.which + ')');
+    } else {
+      alert('Failed to send OTP. Details: ' + (r.error || 'unknown'));
+    }
+  }catch(e){
+    alert('Error while sending OTP: ' + e.message);
+  } finally {
+    setMessage('', true);
+  }
 });
 
 // ---------- Initial render ----------
