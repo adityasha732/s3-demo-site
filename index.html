@@ -62,13 +62,12 @@
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
 
-      <!-- fixed recipient email -->
       <div class="mt-3">
         <small class="muted">Recipient email (OTP will be sent here):</small>
         <div class="muted small mt-1">shaaditya87@gmail.com</div>
       </div>
 
-      <!-- removed sidebar paste-OTP (requested) -->
+      <!-- sidebar OTP paste removed -->
     </aside>
 
     <main class="flex-grow-1 p-4">
@@ -117,7 +116,7 @@
         </div>
       </div>
 
-      <!-- Files panel (unchanged) -->
+      <!-- files & download panels unchanged (omitted here for brevity but included in code) -->
       <div class="card-panel mt-4">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <h5 class="m-0">Files</h5>
@@ -145,27 +144,20 @@
   </div>
 
 <script>
-/* CloudVault frontend — auto OTP verify + robust presign
-   Notes:
-   - FRONTEND tries BACKEND_BASE then API_BASE for send-otp, verify-otp and presign.
-   - Keys are automatically prefixed with "images/" unless already present.
-   - If Use OTP is checked upload will attempt to verify OTP automatically:
-       * if inline OTP present -> verify
-       * else -> generate OTP, send to default recipient, fill inline OTP, verify
+/* Updated frontend: OTP is sent to email only. No OTP values are shown in UI or alerts.
+   Upload will pause after sending OTP and continue only after user clicks Verify OTP.
 */
 
 const API_BASE = 'http://localhost:8080';
 const BACKEND_BASE = 'http://localhost:3000';
 const DEFAULT_RECIPIENT_EMAIL = 'shaaditya87@gmail.com';
 
-// auth helpers (unchanged)
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
 function getToken(){ return localStorage.getItem('cv_token'); }
 function authHeaders(h={}){ const t=getToken(); if(t) h['Authorization']='Bearer '+t; return h; }
 function updateUserInfo(){ document.getElementById('userInfo').textContent = getToken() ? 'Signed in' : ''; }
 updateUserInfo();
 
-// state + DOM refs
 let files=[]; let view='all'; let renderMode='list';
 const fileInput = document.getElementById('fileInput');
 const keyInput = document.getElementById('keyInput');
@@ -198,7 +190,7 @@ function humanSize(n){ if(n!==0 && !n) return ''; const units=['B','KB','MB','GB
 function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
 function generateOtp(len=6){ return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0"); }
 
-// helpers to call backend endpoints with fallback order: BACKEND_BASE then API_BASE
+// helper: POST to BACKEND_BASE then API_BASE fallback
 async function tryPostWithFallback(path, payload){
   async function tryHost(base){
     try{
@@ -211,34 +203,32 @@ async function tryPostWithFallback(path, payload){
       return { ok: resp.ok, status: resp.status, json: j, error: null, base };
     }catch(err){ return { ok:false, status:null, json:null, error: err.message || String(err), base }; }
   }
-
-  // try BACKEND_BASE first (useful for local OTP server), then API_BASE
+  let backendFail, apiFail;
   if(BACKEND_BASE){
     const r = await tryHost(BACKEND_BASE);
     if(r.ok) return r;
-    var backendFail = r;
+    backendFail = r;
   }
   if(API_BASE && API_BASE !== BACKEND_BASE){
     const r2 = await tryHost(API_BASE);
     if(r2.ok) return r2;
-    var apiFail = r2;
+    apiFail = r2;
   }
-
-  const errorDetail = (backendFail && backendFail.error) || (apiFail && apiFail.error) || ('backend status: ' + (backendFail?.status||'n/a') + ', api status: ' + (apiFail?.status||'n/a'));
-  return { ok:false, status:null, json:null, error: errorDetail };
+  const errorDetail = backendFail?.error || apiFail?.error || ('backend status: ' + (backendFail?.status||'n/a') + ', api status: ' + (apiFail?.status||'n/a'));
+  return { ok:false, status:null, json:null, error: errorDetail, base: (backendFail?.base || apiFail?.base || null) };
 }
 
-// send OTP (uses /send-otp) — returns object { ok, which, status, json, error }
-async function emailOtpToRecipient(backendBase, email, otp, key){
+// send OTP (calls /send-otp via fallback)
+async function emailOtpToRecipient(email, otp, key){
   return await tryPostWithFallback('/send-otp', { email, otp, key });
 }
 
-// verify OTP (uses /verify-otp) — returns object { ok, which, status, json, error }
-async function tryVerifyOtp(backendBase, otp, key){
+// verify OTP (calls /verify-otp via fallback)
+async function verifyOtpOnServer(otp, key){
   return await tryPostWithFallback('/verify-otp', { otp, key });
 }
 
-// seed/demo
+// demo seed
 function seedDemoIfNeeded(){ if(API_BASE) return; if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
 seedDemoIfNeeded();
 
@@ -289,82 +279,95 @@ function guessEmojiForName(name){
   const n=(name||'').toLowerCase(); if(n.endsWith('.jpg')||n.endsWith('.png')||n.endsWith('.gif')) return '🖼️'; if(n.endsWith('.pdf')) return '📄'; if(n.endsWith('.zip')||n.endsWith('.tar')||n.endsWith('.gz')) return '🗜️'; return '📁';
 }
 
-// actions (unchanged)
+// actions
 function toggleStar(key){ const it=files.find(x=>x.key===key); if(!it) return; it.star=!it.star; if(API_BASE) fetch(API_BASE+'/files/star',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({key,star:!!it.star})}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
 function moveToTrash(key){ if(!confirm('Move to Trash?')) return; const it=files.find(x=>x.key===key); if(!it) return; it.deleted=true; it.modified=nowMs(); if(API_BASE) fetch(API_BASE+'/files/trash',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({key})}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
 function restoreFromTrash(key){ const it=files.find(x=>x.key===key); if(!it) return; it.deleted=false; it.modified=nowMs(); if(API_BASE) fetch(API_BASE+'/files/restore',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({key})}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
 function permanentlyDelete(key){ if(!confirm('Permanently delete? This cannot be undone.')) return; const idx=files.findIndex(x=>x.key===key); if(idx===-1) return; files.splice(idx,1); if(API_BASE) fetch(API_BASE+'/files/'+encodeURIComponent(key),{method:'DELETE',headers:authHeaders()}).catch(()=>{}); saveLocalFiles(); renderFiles(); }
 function openPresigned(url,key){ if(url){ window.open(url,'_blank'); return; } if(!API_BASE) { alert('No API configured: cannot open. Use Get URL to get a presigned GET for ' + key); return; } requestGetPresign(encodeURIComponent(key)); }
 
-// ---------- Upload flow with auto-OTP-verify ----------
+// ---------- Pending upload state ----------
+let pendingUpload = null; // { file, keyVal, manualPutValue, otpNeeded }
+
+// ---------- Upload behaviour (no auto-verify, no OTP display) ----------
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   if(!file) return alert('Pick a file to upload');
 
-  // build key (prefix images/ if missing)
+  // ensure key uses images/ prefix
   let keyVal = keyInput.value.trim() || file.name;
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
 
-  // OTP logic: if Use OTP checked attempt auto-verify
-  let otp = (otpInline && otpInline.value) ? otpInline.value.trim() : '';
-  let otpVerified = false;
+  // if OTP flow not selected, continue upload now
+  if(!chkOtp.checked){
+    // do normal presign + upload (reuse function)
+    await performPresignAndUpload(file, keyVal);
+    return;
+  }
 
+  // OTP flow selected
+  // if otpInline has user-typed OTP -> try verify and upload on success
+  const typedOtp = (otpInline && otpInline.value) ? otpInline.value.trim() : '';
+
+  if(typedOtp){
+    // verify OTP, if success continue upload
+    setMessage('Verifying OTP...', true);
+    try{
+      const vr = await verifyOtpOnServer(typedOtp, keyVal);
+      if(!vr.ok) {
+        setMessage('OTP verification failed', false);
+        alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status)));
+        return;
+      }
+      // verified: continue
+      setMessage('OTP verified — continuing upload...', true);
+      await performPresignAndUpload(file, keyVal, typedOtp);
+    }catch(e){
+      setMessage('OTP verify error', false);
+      console.error(e);
+      alert('Error verifying OTP: ' + e.message);
+    }
+    return;
+  }
+
+  // no typed OTP: send OTP to email and pause upload until user verifies
+  setMessage('Sending OTP to email — check your inbox', true);
+  try{
+    // send OTP request to server; server is responsible for generating & emailing OTP
+    const r = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
+    if(!r.ok){
+      setMessage('Failed to send OTP: ' + r.error, false);
+      alert('Failed to send OTP: ' + r.error + '\n(If your backend is on localhost and your frontend is hosted remotely, the host cannot reach localhost.)');
+      return;
+    }
+    // OTP sent (server should have generated and emailed it). Save pending upload state.
+    pendingUpload = { file, keyVal };
+    setMessage('OTP sent — enter it in the box and click Verify OTP to continue', true);
+    alert('An OTP was sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Enter it in the inline OTP box and press Verify OTP to continue the upload.');
+    // do not auto-fill inline OTP and do not auto-verify
+  }catch(e){
+    setMessage('Error sending OTP: ' + e.message, false);
+    console.error(e);
+    alert('Error sending OTP: ' + e.message);
+  }
+});
+
+// function to actually request presign and upload (includes otp param if provided)
+async function performPresignAndUpload(file, keyVal, otpForPresign){
   try{
     setProgress(0);
-    setMessage('Preparing upload...', true);
-
-    if(chkOtp.checked){
-      // If OTP provided inline -> try verify first
-      if(otp){
-        setMessage('Verifying OTP...', true);
-        const vr = await tryVerifyOtp(BACKEND_BASE, otp, keyVal);
-        if(vr.ok){
-          otpVerified = true;
-          setMessage('OTP verified', true);
-        } else {
-          // verification failed — try sending a fresh OTP and verify it automatically
-          console.warn('Inline OTP verify failed:', vr.error);
-          setMessage('Inline OTP not valid — sending fresh OTP...', true);
-          const generated = generateOtp(6);
-          const sendRes = await emailOtpToRecipient(BACKEND_BASE, DEFAULT_RECIPIENT_EMAIL, generated, keyVal);
-          if(!sendRes.ok) throw new Error('Failed to send OTP: ' + (sendRes.error || ('status ' + sendRes.status)));
-          // place generated OTP into inline field
-          otp = generated;
-          otpInline.value = generated;
-          // now verify the generated OTP
-          setMessage('Verifying generated OTP...', true);
-          const vr2 = await tryVerifyOtp(BACKEND_BASE, generated, keyVal);
-          if(!vr2.ok) throw new Error('OTP verify failed after send: ' + (vr2.error || ('status ' + vr2.status)));
-          otpVerified = true;
-          setMessage('OTP sent & verified', true);
-        }
-      } else {
-        // no inline otp: generate, send, then verify automatically
-        setMessage('Generating & sending OTP...', true);
-        const generated = generateOtp(6);
-        const sendRes = await emailOtpToRecipient(BACKEND_BASE, DEFAULT_RECIPIENT_EMAIL, generated, keyVal);
-        if(!sendRes.ok) throw new Error('Failed to send OTP: ' + (sendRes.error || ('status ' + sendRes.status)));
-        otp = generated;
-        otpInline.value = generated;
-        setMessage('Verifying OTP...', true);
-        const vr = await tryVerifyOtp(BACKEND_BASE, generated, keyVal);
-        if(!vr.ok) throw new Error('OTP verify failed after send: ' + (vr.error || ('status ' + vr.status)));
-        otpVerified = true;
-        setMessage('OTP sent & verified', true);
-      }
-    }
-
-    // --- Request presigned URL (only include otp if verified) ---
     setMessage('Requesting presigned URL...', true);
+
     let presignUrl = manualPut.value.trim();
     let realKey = keyVal;
     let presignResponseJson = null;
 
+    // try BACKEND_BASE then API_BASE
     async function tryPresignHost(base){
       const resp = await fetch(base.replace(/\/$/,'') + '/presign', {
         method:'POST',
         headers: authHeaders({'Content-Type':'application/json'}),
-        body: JSON.stringify({ filename:file.name, contentType:file.type, key: realKey, otp: (otpVerified ? otp : '') })
+        body: JSON.stringify({ filename:file.name, contentType:file.type, key: realKey, otp: (otpForPresign || '') })
       });
       if(!resp.ok) throw new Error('Presign request failed: ' + resp.status + ' @ ' + base);
       return await resp.json();
@@ -392,10 +395,9 @@ uploadBtn.addEventListener('click', async ()=>{
 
     if(!presignUrl) throw new Error('No presigned URL available');
 
-    // upload using presigned PUT
     await xhrUpload(presignUrl, file);
 
-    // metadata registration (non-blocking)
+    // Register metadata (try API_BASE then BACKEND_BASE)
     try {
       if(API_BASE){
         await fetch(API_BASE + '/files', { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }) });
@@ -408,28 +410,23 @@ uploadBtn.addEventListener('click', async ()=>{
       }
     }
 
-    // success UI updates
     files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
     saveLocalFiles();
     setMessage('Upload finished: ' + realKey, true);
     setProgress(100);
     renderFiles();
+    // clear pending/upload fields
+    pendingUpload = null;
     fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
-
-    // (if OTP checked and verified but we generated OTP locally, we already sent it earlier)
-    if(chkOtp.checked && otpVerified){
-      // ensure inline OTP updated (already done above)
-      // no extra action required
-    }
   }catch(err){
     console.error(err);
     setMessage('Upload error: '+(err.message||err), false);
     setProgress(0);
     alert('Upload failed: ' + (err.message || err));
   }
-});
+}
 
-// manual paste PUT upload (unchanged except images/ prefix for stored key)
+// manual paste PUT upload unchanged except derived key prefix
 uploadManual.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   const url = manualPut.value.trim();
@@ -480,7 +477,7 @@ async function requestGetPresign(key){
 document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
-// UI: checkboxes show/hide relevant controls
+// UI: show/hide controls
 function updateCheckboxUI(){
   if(chkOtp.checked){ sendOtpBtn.style.display='inline-block'; otpInline.style.display='inline-block'; verifyOtpBtn.style.display='inline-block'; } else { sendOtpBtn.style.display='none'; otpInline.style.display='none'; verifyOtpBtn.style.display='none'; }
   if(chkPresign.checked){ manualPut.style.display='block'; manualPutHint.style.display='block'; uploadManual.style.display='inline-block'; } else { manualPut.style.display='none'; manualPutHint.style.display='none'; uploadManual.style.display='none'; }
@@ -489,39 +486,61 @@ chkOtp.addEventListener('change', updateCheckboxUI);
 chkPresign.addEventListener('change', updateCheckboxUI);
 updateCheckboxUI();
 
-// Send OTP button: explicit send (user can also rely on auto-send during Upload)
+// Send OTP button: ask backend to send OTP (no display)
 sendOtpBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   let keyVal = keyInput.value.trim() || (file ? file.name : '');
   if(!keyVal) return alert('Enter a key or choose a file so a key can be associated with the OTP.');
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-  const otp = generateOtp(6);
-  setMessage('Sending OTP...', true);
+  setMessage('Sending OTP to ' + DEFAULT_RECIPIENT_EMAIL + '...', true);
   try{
-    const r = await emailOtpToRecipient(BACKEND_BASE, DEFAULT_RECIPIENT_EMAIL, otp, keyVal);
-    if(r.ok){ otpInline.value = otp; alert('OTP ' + otp + ' sent to ' + DEFAULT_RECIPIENT_EMAIL + ' (via ' + r.base + ')'); }
-    else alert('Failed to send OTP: ' + (r.error || 'unknown'));
-  }catch(e){ alert('Error while sending OTP: ' + e.message); }
+    const r = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
+    if(r.ok){
+      pendingUpload = null; // nothing pending unless user began an upload
+      setMessage('OTP sent — check your email', true);
+      alert('OTP sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Enter it here and press Verify OTP.');
+    } else {
+      setMessage('Failed to send OTP: ' + r.error, false);
+      alert('Failed to send OTP: ' + r.error);
+    }
+  }catch(e){
+    setMessage('Error sending OTP: ' + e.message, false);
+    alert('Error sending OTP: ' + e.message);
+  }
   setMessage('', true);
 });
 
-// Verify OTP button: explicit verify (user can also rely on auto-verify during Upload)
+// Verify OTP button: user must type OTP they received in their email
 verifyOtpBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  let keyVal = keyInput.value.trim() || (file ? file.name : '');
-  if(!keyVal) return alert('Enter a key or choose a file so a key can be associated with the OTP.');
+  const typedOtp = otpInline.value ? otpInline.value.trim() : '';
+  if(!typedOtp) return alert('Enter OTP in the inline box first.');
+  // determine key for verification: priority: keyInput -> pendingUpload.keyVal -> prompt
+  let keyVal = keyInput.value.trim();
+  if(!keyVal && pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
+  if(!keyVal) return alert('Enter a key or start an upload so the backend can verify the OTP against a key.');
   if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-  const otp = otpInline.value ? otpInline.value.trim() : '';
-  if(!otp) return alert('Enter OTP in the inline box first or use Send OTP to generate one.');
   setMessage('Verifying OTP...', true);
   try{
-    const r = await tryVerifyOtp(BACKEND_BASE, otp, keyVal);
-    if(r.ok){ alert('OTP verified successfully (' + r.base + ')'); } else alert('OTP verification failed: ' + (r.error || 'unknown'));
-  }catch(e){ alert('Error verifying OTP: ' + e.message); }
+    const r = await verifyOtpOnServer(typedOtp, keyVal);
+    if(!r.ok){
+      setMessage('OTP verification failed', false);
+      alert('OTP verification failed: ' + r.error);
+      return;
+    }
+    setMessage('OTP verified', true);
+    alert('OTP verified successfully. Now continuing upload if one is pending.');
+    // if an upload was pending, continue it
+    if(pendingUpload && pendingUpload.file){
+      await performPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp);
+    }
+  }catch(e){
+    setMessage('Error verifying OTP: ' + e.message, false);
+    alert('Error verifying OTP: ' + e.message);
+  }
   setMessage('', true);
 });
 
-// quick UI and event wiring
+// other UI wiring
 document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
 document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
 document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
