@@ -10,7 +10,7 @@
     body { font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f4f6f8; margin:0; }
     .topbar{height:64px;background:#fff;border-bottom:1px solid #eef2f6;display:flex;align-items:center;padding:0 20px}
     .logo{height:40px;margin-right:12px;border-radius:6px;object-fit:cover;cursor:pointer}
-    .sidebar{width:220px;background:#fff;padding:16px;border-right:1px solid #eef2f6;min-height:calc(100vh - 64px)}
+    .sidebar{width:260px;background:#fff;padding:16px;border-right:1px solid #eef2f6;min-height:calc(100vh - 64px)}
     .card-panel{border-radius:12px;padding:18px;background:#fff;box-shadow:0 6px 18px rgba(12,26,44,0.04)}
     .file-tile{border-radius:8px;padding:12px;background:#fbfdff;border:1px solid #eef4ff}
     .muted{color:var(--muted)}
@@ -30,6 +30,9 @@
     #otpInline { width:130px; margin-left:8px; display:none; }
     #verifyOtpBtn { display:none; margin-left:6px; }
     .diag { margin-top:8px; font-size:.9rem; color:#6b7280; }
+    .small-muted { font-size:.85rem; color:#6b7280; }
+    .backend-row { display:flex; gap:8px; align-items:center; margin-top:12px; }
+    .curl-block { white-space:pre-wrap; background:#0b1220; color:#d8eefe; padding:10px; border-radius:6px; font-family:monospace; font-size:0.85rem; }
   </style>
 </head>
 <body>
@@ -58,7 +61,16 @@
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
 
-      <!-- recipient email & backend override (UI removed on purpose) -->
+      <!-- BACKEND OVERRIDE: visible so you can paste a reachable host (ngrok/remote) -->
+      <div class="mt-3">
+        <small class="muted">Backend URL (paste ngrok or deployed backend here):</small>
+        <div class="backend-row">
+          <input id="backendOverride" class="form-control form-control-sm" placeholder="https://abcd1234.ngrok.io" />
+          <button id="backendSaveBtn" class="btn btn-sm btn-outline-primary">Save</button>
+        </div>
+        <div id="backendDiag" class="diag"></div>
+        <div class="muted small mt-2">If your frontend is hosted (GitHub Pages) and backend runs on your PC, expose backend (e.g. ngrok) and paste HTTPS URL above.</div>
+      </div>
     </aside>
 
     <main class="flex-grow-1 p-4">
@@ -129,17 +141,31 @@
         </div>
         <div class="muted small mt-2">If your backend implements /presign-get, it will return a presigned GET for a requested key.</div>
       </div>
+
+      <div class="card-panel mt-4">
+        <h6 class="m-0">Diagnostics</h6>
+        <div class="muted small mt-2">If a request fails, the error will be shown here and a curl command you can run to debug will appear.</div>
+        <div id="diagBox" class="mt-2"></div>
+      </div>
+
     </main>
   </div>
 
 <script>
-/* Updated: removed key/password inputs; backend-override UI removed; UI no longer shows recipient email.
-   OTP sending still targets DEFAULT_RECIPIENT_EMAIL. The frontend will attempt API_BASE -> BACKEND_BASE order.
+/* Behavior:
+   - The override input stores a backend URL in localStorage (key "cv_backend_override")
+   - tryPostWithFallback will try override first, then API_BASE, then BACKEND_BASE
+   - When a network/CORS error occurs the diag box shows details + a curl command
 */
 
 const API_BASE = 'http://localhost:8080';
 const BACKEND_BASE = 'http://localhost:3000';
 const DEFAULT_RECIPIENT_EMAIL = 'shaaditya87@gmail.com';
+
+const backendOverrideInput = document.getElementById('backendOverride');
+const backendSaveBtn = document.getElementById('backendSaveBtn');
+const backendDiag = document.getElementById('backendDiag');
+const diagBox = document.getElementById('diagBox');
 
 const fileInput = document.getElementById('fileInput');
 const uploadBtn = document.getElementById('uploadBtn');
@@ -161,6 +187,7 @@ const verifyOtpBtn = document.getElementById('verifyOtpBtn');
 const manualPutHint = document.getElementById('manualPutHint');
 
 const STORE_KEY = 'cv_files_v1';
+const OVERRIDE_KEY = 'cv_backend_override';
 let files = [];
 let pendingUpload = null;
 
@@ -185,15 +212,14 @@ function fetchWithTimeout(url, opts={}, timeout=4000){
 
 async function checkReachable(base){
   if(!base) return { ok:false, reason:'no-base', base };
-  const probe = base.replace(/\/$/, '') + '/health';
+  const probe = base.replace(/\/$/,'') + '/health';
   try{
     const r = await fetchWithTimeout(probe, { method:'GET', mode:'cors' }, 3000);
     if(r.ok) return { ok:true, base, reason:'health-ok' };
     return { ok:true, base, reason:'health-non200' };
   }catch(e){
-    // fallback root
     try{
-      const r2 = await fetchWithTimeout(base.replace(/\/$/, ''), { method:'GET', mode:'cors' }, 3000);
+      const r2 = await fetchWithTimeout(base.replace(/\/$/,''), { method:'GET', mode:'cors' }, 3000);
       if(r2.ok) return { ok:true, base, reason:'root-ok' };
       return { ok:true, base, reason:'root-non200' };
     }catch(err){
@@ -207,11 +233,30 @@ async function checkReachable(base){
   }
 }
 
+function getOverride(){
+  const v = (backendOverrideInput && backendOverrideInput.value && backendOverrideInput.value.trim()) ? backendOverrideInput.value.trim() : localStorage.getItem(OVERRIDE_KEY);
+  return v ? v.replace(/\/$/,'') : null;
+}
+
+backendSaveBtn.addEventListener('click', ()=>{
+  const val = backendOverrideInput.value && backendOverrideInput.value.trim();
+  if(!val) { localStorage.removeItem(OVERRIDE_KEY); backendDiag.innerText = 'Backend override cleared.'; return; }
+  localStorage.setItem(OVERRIDE_KEY, val);
+  backendDiag.innerText = 'Saved override: ' + val;
+});
+
+(function initOverrideInput(){
+  const saved = localStorage.getItem(OVERRIDE_KEY);
+  if(saved) backendOverrideInput.value = saved;
+})();
+
 async function tryPostWithFallback(path, payload){
-  // Order: API_BASE first (if set), then BACKEND_BASE. No UI override element present.
+  // Order: override, API_BASE, BACKEND_BASE
+  const override = getOverride();
   const hostsToTry = [];
-  if(API_BASE) hostsToTry.push(API_BASE.replace(/\/$/, ''));
-  if(BACKEND_BASE) hostsToTry.push(BACKEND_BASE.replace(/\/$/, ''));
+  if(override) hostsToTry.push(override);
+  if(API_BASE) hostsToTry.push(API_BASE.replace(/\/$/,''));
+  if(BACKEND_BASE) hostsToTry.push(BACKEND_BASE.replace(/\/$/,''));
   let lastErr = null;
   for(const host of hostsToTry){
     try{
@@ -226,9 +271,43 @@ async function tryPostWithFallback(path, payload){
   return { ok:false, error: lastErr ? (lastErr.message || String(lastErr)) : 'no-host', base:null };
 }
 
+function showDiagError(title, err, attemptedHosts){
+  diagBox.innerHTML = '';
+  const p = document.createElement('div');
+  p.className = 'small-muted';
+  p.textContent = title + ' — ' + (err && err.toString ? err.toString() : String(err));
+  diagBox.appendChild(p);
+
+  // show attempted hosts
+  if(attemptedHosts && attemptedHosts.length){
+    const h = document.createElement('div');
+    h.className = 'muted small mt-2';
+    h.textContent = 'Tried hosts: ' + attemptedHosts.join(', ');
+    diagBox.appendChild(h);
+  }
+
+  // curl command to test backend directly (user can copy and run locally)
+  const override = getOverride() || API_BASE || BACKEND_BASE;
+  const host = override ? override.replace(/\/$/,'') : '(set backend override)';
+  const curlCmd = `curl -v -X POST ${host || '<host>'}/send-otp \\\n  -H "Content-Type: application/json" \\\n  -d '{"email":"${DEFAULT_RECIPIENT_EMAIL}","key":"images/test.jpg"}'`;
+  const pre = document.createElement('div');
+  pre.className = 'curl-block mt-2';
+  pre.textContent = curlCmd;
+  diagBox.appendChild(pre);
+
+  // helpful tips
+  const tips = document.createElement('div');
+  tips.className = 'muted small mt-2';
+  tips.innerHTML = 'Tip: If you run your backend locally, install <strong>ngrok</strong>: <code>ngrok http 3000</code> then paste the https ngrok URL into the Backend URL field above.';
+  diagBox.appendChild(tips);
+}
+
 async function sendOtpToServer(keyVal){
   setMessage('Checking backend reachability...', true);
+  // build to-check list for diagnostics
+  const overrideVal = getOverride();
   const toCheck = [];
+  if(overrideVal) toCheck.push(overrideVal);
   if(API_BASE) toCheck.push(API_BASE);
   if(BACKEND_BASE) toCheck.push(BACKEND_BASE);
   let reachable = null;
@@ -238,19 +317,24 @@ async function sendOtpToServer(keyVal){
     if(!reachable) reachable = { base: r.base, reason: r.reason };
   }
   if(!reachable || !reachable.base){
+    backendDiag.innerText = 'Backend unreachable from this browser. Paste a reachable URL (ngrok / deployed) above.';
     setMessage('Failed to send OTP: backend unreachable', false);
-    alert('Failed to send OTP: backend unreachable.\n\nLikely causes:\n• Frontend hosted remotely but backend is http://localhost:3000 (remote cannot reach localhost).\n• CORS blocked the request.\n\nFix: host backend publicly or run ngrok and point your backend accordingly.');
+    showDiagError('Failed to send OTP: backend unreachable', reachable ? reachable.reason : 'no reachable host', toCheck);
+    alert('Failed to send OTP: backend unreachable. Use ngrok or deploy backend and paste URL into Backend field.');
     return { ok:false, error:'unreachable' };
   }
 
+  backendDiag.innerText = '';
   setMessage('Sending OTP to server (' + reachable.base + ')...', true);
   const res = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
   if(!res.ok){
-    setMessage('Failed to send OTP: ' + (res.error || 'unknown'), false);
-    alert('Failed to send OTP. Likely network or CORS issue.\n\nCheck your backend logs and CORS policy.');
+    setMessage('Failed to send OTP: Likely network or CORS issue.', false);
+    showDiagError('Failed to send OTP. Likely network or CORS issue.', res.error, [ getOverride(), API_BASE, BACKEND_BASE ].filter(Boolean));
+    alert('Failed to send OTP. Likely network or CORS issue.\n\nCheck the diagnostics panel for a curl command and hints.');
     return res;
   }
   setMessage('OTP request accepted by ' + res.base, true);
+  diagBox.innerHTML = '';
   return res;
 }
 
@@ -259,6 +343,7 @@ async function verifyOtpOnServer(otp, keyVal){
   const res = await tryPostWithFallback('/verify-otp', { otp, key: keyVal });
   if(!res.ok){
     setMessage('OTP verify failed: ' + (res.error || 'unknown'), false);
+    showDiagError('OTP verify failed', res.error, [ getOverride(), API_BASE, BACKEND_BASE ].filter(Boolean));
     return res;
   }
   setMessage('OTP verified by ' + res.base, true);
@@ -272,8 +357,10 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
   let realKey = keyVal;
   if(!presignUrl){
     const hosts = [];
-    if(API_BASE) hosts.push(API_BASE.replace(/\/$/, ''));
-    if(BACKEND_BASE) hosts.push(BACKEND_BASE.replace(/\/$/, ''));
+    const overrideVal = getOverride();
+    if(overrideVal) hosts.push(overrideVal);
+    if(API_BASE) hosts.push(API_BASE.replace(/\/$/,''));
+    if(BACKEND_BASE) hosts.push(BACKEND_BASE.replace(/\/$/,''));
     let presignResponseJson = null;
     let lastErr = null;
     for(const host of hosts){
@@ -298,7 +385,8 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
     if(!presignUrl){
       const msg = 'Presign failed: ' + (lastErr ? (lastErr.message || String(lastErr)) : 'no-host');
       setMessage(msg, false);
-      alert(msg + '\n\nIf your backend is on localhost and this page is hosted remotely, run ngrok and point backend to a public URL.');
+      showDiagError('Presign failed', lastErr || msg, [ getOverride(), API_BASE, BACKEND_BASE ].filter(Boolean));
+      alert(msg + '\n\nIf your backend is on localhost and this page is hosted remotely, run ngrok and paste its URL into Backend URL above.');
       throw new Error(msg);
     }
   }
@@ -307,8 +395,10 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
 
   try {
     const metaHosts = [];
-    if(API_BASE) metaHosts.push(API_BASE.replace(/\/$/, ''));
-    if(BACKEND_BASE) metaHosts.push(BACKEND_BASE.replace(/\/$/, ''));
+    const overrideVal = getOverride();
+    if(overrideVal) metaHosts.push(overrideVal);
+    if(API_BASE) metaHosts.push(API_BASE.replace(/\/$/,''));
+    if(BACKEND_BASE) metaHosts.push(BACKEND_BASE.replace(/\/$/,''));
     for(const h of metaHosts){
       try{
         await fetchWithTimeout(h + '/files', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type }), mode:'cors' }, 6000);
@@ -410,14 +500,15 @@ function xhrUpload(url, file){
 
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
-  const host = API_BASE || BACKEND_BASE;
+  const overrideVal = getOverride();
+  const host = overrideVal || API_BASE;
   try{
-    const resp = await fetch(host.replace(/\/$/, '') + '/presign-get', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ key: decoded }), mode:'cors' });
+    const resp = await fetch(host.replace(/\/$/,'') + '/presign-get', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ key: decoded }), mode:'cors' });
     if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
     const j = await resp.json();
     getUrlInput.value = j.url;
     alert('Presigned GET placed in the input');
-  }catch(e){ alert('Error requesting GET presign: '+e.message); }
+  }catch(e){ alert('Error requesting GET presign: '+e.message); showDiagError('GET presign failed', e, [ getOverride(), API_BASE, BACKEND_BASE ].filter(Boolean)); }
 }
 
 function updateCounts(){
