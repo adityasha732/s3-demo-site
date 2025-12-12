@@ -33,15 +33,16 @@
     #otpInline { width:130px; margin-left:8px; display:none; }
     #verifyOtpBtn { display:none; margin-left:6px; }
     #backendOverrideWrap { display:none; margin-top:10px; }
-    .diag { margin-top:8px; font-size:.9rem; color:#6b7280; }
+    .diag { margin-top:8px; font-size:.9rem; color:#6b7280; white-space:pre-wrap; }
   </style>
 </head>
 <body>
   <div class="topbar">
+    <!-- keep your logo references intact; fallback attempts try local and packaged images -->
     <img id="topLogo" src="asset/sing-crayon-shin-chan.gif" data-attempt="0" class="logo" alt="CloudVault logo"
          onerror="
            if(this.dataset.attempt==='0'){ this.dataset.attempt='1'; this.src='http://localhost:8080/logo.gif'; }
-           else if(this.dataset.attempt==='1'){ this.dataset.attempt='2'; this.src='/mnt/data/cfc48cb5-7ecd-4cb4-9ea7-2764acdde733.png'; }
+           else if(this.dataset.attempt==='1'){ this.dataset.attempt='2'; this.src='/mnt/data/69535009-d515-4364-99ad-4ab9664059c6.png'; }
            else this.style.display='none';
          ">
     <h5 id="siteTitle" class="mb-0 me-3">CloudVault</h5>
@@ -69,7 +70,7 @@
 
       <div id="backendOverrideWrap">
         <small class="muted">Backend override (paste reachable URL for testing):</small>
-        <input id="backendOverride" class="form-control form-control-sm mt-1" placeholder="https://<your-ngrok-or-host>.example" />
+        <input id="backendOverride" class="form-control form-control-sm mt-1" placeholder="https://&lt;your-ngrok-or-host&gt;.example" />
         <div class="diag" id="backendDiag"></div>
       </div>
     </aside>
@@ -120,7 +121,6 @@
         </div>
       </div>
 
-      <!-- files / download panels (unchanged behavior) -->
       <div class="card-panel mt-4">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <h5 class="m-0">Files</h5>
@@ -149,18 +149,16 @@
 
 <script>
 /*
-  Final debugged CloudVault frontend:
-  - Improved diagnostics for "Failed to fetch"
-  - Backend override input appears when reachability fails
-  - No OTP values are shown in UI or alerts (server does that)
-  - Upload + OTP flows unchanged functionally
+  Full debugged index.html script:
+  - No sign-in added
+  - Diagnostics with explainFailure()
+  - Presign PUT, manual PUT fallback, OTP send/verify, GET presign
+  - Backend override support (for ngrok/localtunnel)
 */
-
-const API_BASE = 'http://localhost:8080';
-const BACKEND_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:8080';    // primary API (if you have one)
+const BACKEND_BASE = 'http://localhost:3000'; // legacy backend
 const DEFAULT_RECIPIENT_EMAIL = 'shaaditya87@gmail.com';
 
-// DOM refs
 const backendOverrideWrap = document.getElementById('backendOverrideWrap');
 const backendOverride = document.getElementById('backendOverride');
 const backendDiag = document.getElementById('backendDiag');
@@ -188,12 +186,12 @@ const manualPutHint = document.getElementById('manualPutHint');
 
 const STORE_KEY = 'cv_files_v1';
 let files = [];
-let pendingUpload = null; // if OTP sent and waiting
+let pendingUpload = null; // { file, keyVal }
 
+// helpers
 function setMessage(text, ok=true){
   uploadMsg.textContent = text || '';
   uploadMsg.style.color = ok ? 'green' : 'crimson';
-  // do not auto-clear critical diagnostic messages
   if(ok) setTimeout(()=>{ if(uploadMsg.textContent === text) uploadMsg.textContent = ''; }, 5000);
 }
 function setProgress(pct){ pct=Math.max(0,Math.min(100,Math.round(pct))); if(pct===0) progressWrap.style.display='none'; else progressWrap.style.display='block'; progressBar.style.width=pct+'%'; progressLabel.textContent=pct+'%'; }
@@ -204,7 +202,76 @@ function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;
 function humanSize(n){ if(n!==0 && !n) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
 function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
 
-// small timeout helper for fetch
+// centralized diagnostics: explain why operations stopped/failed
+function explainFailure(context, err){
+  console.error('Operation failed:', context, err);
+  let short = 'Operation failed: ' + context;
+  let detail = '';
+  let likely = '';
+
+  if(!err){
+    detail = 'No additional error information available.';
+  } else if(err instanceof Error){
+    detail = err.message || String(err);
+    const m = (detail || '').toLowerCase();
+    if(m.includes('timeout')) likely = 'timeout';
+    else if(m.includes('failed to fetch') || m.includes('networkerror') || m.includes('network')) likely = 'network-or-cors';
+    else likely = 'server-error';
+  } else if(typeof err === 'string'){
+    detail = err;
+    const lm = err.toLowerCase();
+    if(lm.includes('cors') || lm.includes('access-control')) likely = 'cors';
+    else if(lm.includes('network') || lm.includes('failed to fetch')) likely = 'network-or-cors';
+    else likely = 'server-error';
+  } else if(err && typeof err === 'object' && ('status' in err || 'ok' in err)){
+    try{
+      const st = err.status;
+      detail = 'HTTP ' + st + (err.statusText ? (' ' + err.statusText) : '');
+      if(st>=400 && st<500) likely='client-error';
+      else if(st>=500) likely='server-error';
+      else likely='unexpected-status';
+    }catch(e){
+      detail = JSON.stringify(err);
+      likely='unknown';
+    }
+  } else {
+    detail = JSON.stringify(err);
+    likely='unknown';
+  }
+
+  const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
+  const originIsLocalhost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+  if(!originIsLocalhost && (String(overrideVal||BACKEND_BASE||API_BASE).includes('localhost') || String(overrideVal||BACKEND_BASE||API_BASE).includes('127.0.0.1'))){
+    likely = 'localhost-unreachable-from-remote';
+  }
+
+  let advice = '';
+  if(likely === 'timeout'){
+    advice = 'The request timed out. If your backend is slow, increase server responsiveness or adjust frontend timeout.';
+  } else if(likely === 'network-or-cors'){
+    advice = 'Likely a network problem or CORS issue. Check browser console (Network tab) and ensure backend sets Access-Control-Allow-Origin. If your backend runs on localhost and this page is hosted remotely, the browser cannot reach localhost — use ngrok/localtunnel and paste the public URL in Backend override.';
+  } else if(likely === 'cors'){
+    advice = 'CORS rejection detected. Ensure backend responds with Access-Control-Allow-Origin and Access-Control-Allow-Headers/Methods.';
+  } else if(likely === 'localhost-unreachable-from-remote'){
+    advice = 'This page appears hosted remotely while backend points to localhost. Remote pages cannot reach your machine at http://localhost. Use ngrok/localtunnel and paste the public URL into Backend override.';
+  } else if(likely === 'client-error'){
+    advice = 'Client error (4xx). Check request payload and backend logs for validation/auth issues.';
+  } else if(likely === 'server-error'){
+    advice = 'Server error (5xx). Check backend logs for exceptions and ensure server is healthy.';
+  } else {
+    advice = 'Inspect browser console and backend logs for more information.';
+  }
+
+  const shortUi = `${short} — ${detail}`;
+  backendDiag.innerText = shortUi + (advice ? '\n\nAdvice: ' + advice : '');
+  backendOverrideWrap.style.display = 'block';
+  setMessage(short + ': ' + (detail || 'unknown'), false);
+  try{
+    alert(short + '\n' + (detail ? detail + '\n\n' : '') + 'Likely cause: ' + likely + '\n\n' + advice);
+  }catch(e){}
+}
+
+// fetch timeout helper
 function fetchWithTimeout(url, opts={}, timeout=4000){
   return new Promise((resolve, reject)=>{
     const timer = setTimeout(()=> reject(new Error('timeout')), timeout);
@@ -212,37 +279,37 @@ function fetchWithTimeout(url, opts={}, timeout=4000){
   });
 }
 
-// check reachability for a host (returns { ok, reason, base })
+// minimal headers helper (no auth)
+function authHeaders(extra){
+  const headers = Object.assign({}, extra || {});
+  return headers;
+}
+
+// reachability probe
 async function checkReachable(base){
   if(!base) return { ok:false, reason:'no-base', base };
   const probe = base.replace(/\/$/,'') + '/health';
   try{
-    // try /health first
     const r = await fetchWithTimeout(probe, { method:'GET', mode:'cors' }, 3000);
     if(r.ok) return { ok:true, base, reason:'health-ok' };
-    // if /health exists but non-200, still return ok to allow requests
     return { ok:true, base, reason:'health-non200' };
   }catch(e){
-    // fallback: try root (some backends don't implement /health)
     try{
       const r2 = await fetchWithTimeout(base.replace(/\/$/,''), { method:'GET', mode:'cors' }, 3000);
       if(r2.ok) return { ok:true, base, reason:'root-ok' };
       return { ok:true, base, reason:'root-non200' };
     }catch(err){
-      // distinguish likely causes
       const isLocalhost = base.includes('localhost') || base.includes('127.0.0.1');
-      // If origin is remote and base is localhost, that is unreachable by design
       const originIsLocalhost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
       if(isLocalhost && !originIsLocalhost){
         return { ok:false, reason:'localhost-unreachable-from-hosted-frontend', base };
       }
-      // otherwise generic network/CORS failure (TypeError from fetch)
       return { ok:false, reason: (err && err.message) ? err.message : 'network-or-cors', base };
     }
   }
 }
 
-// unified POST fallback (BACKEND_BASE then API_BASE) with optional override from UI
+// POST fallback across override -> BACKEND_BASE -> API_BASE
 async function tryPostWithFallback(path, payload){
   const override = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
   const hostsToTry = [];
@@ -253,7 +320,7 @@ async function tryPostWithFallback(path, payload){
   for(const host of hostsToTry){
     try{
       const url = host + path;
-      const resp = await fetchWithTimeout(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload), mode:'cors' }, 6000);
+      const resp = await fetchWithTimeout(url, { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body: JSON.stringify(payload), mode:'cors' }, 6000);
       const j = await resp.json().catch(()=>null);
       return { ok: resp.ok, status: resp.status, json: j, base:host, error: null };
     }catch(err){
@@ -263,72 +330,71 @@ async function tryPostWithFallback(path, payload){
   return { ok:false, error: lastErr ? (lastErr.message || String(lastErr)) : 'no-host', base:null };
 }
 
-// Send OTP: ask backend to generate & email OTP (no OTP shown in frontend)
+// Send OTP (server should email OTP — frontend never displays OTP)
 async function sendOtpToServer(keyVal){
   setMessage('Checking backend reachability...', true);
-  // check override / backend / api reachability
   const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
   const toCheck = [];
   if(overrideVal) toCheck.push(overrideVal);
   if(BACKEND_BASE) toCheck.push(BACKEND_BASE);
   if(API_BASE) toCheck.push(API_BASE);
-  // check first available
   let reachable = null;
   for(const b of toCheck){
     const r = await checkReachable(b);
     if(r.ok) { reachable = { base: r.base, reason: r.reason }; break; }
-    // store first failure to present diag
     if(!reachable) reachable = { base: r.base, reason: r.reason };
   }
   if(!reachable || !reachable.base){
-    // show the override input and a helpful message
     backendOverrideWrap.style.display = 'block';
     backendDiag.innerText = 'Backend unreachable from this browser. If your backend runs on localhost and this page is hosted remotely, the browser cannot reach localhost. Use ngrok/localtunnel or host the backend and paste the URL here.';
     setMessage('Failed to send OTP: backend unreachable (see instructions)', false);
-    alert('Failed to send OTP: backend unreachable from this browser.\n\nCommon causes:\n• Frontend hosted remotely (GitHub Pages) but backend is http://localhost:3000 — remote page cannot reach localhost.\n• CORS not enabled on backend.\n\nFix: host backend on a public URL (Railway/Render) or expose local port (ngrok) and paste the reachable URL into the Backend override input on the left.');
+    explainFailure('send-otp: backend-unreachable', 'no reachable backend');
     return { ok:false, error:'unreachable' };
   }
 
-  // hide override UI if present
   backendOverrideWrap.style.display = 'none';
   setMessage('Sending OTP to server (' + reachable.base + ')...', true);
-  const res = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
-  if(!res.ok){
-    // if fetch failed with TypeError most likely network/CORS; show instructions
-    backendOverrideWrap.style.display = 'block';
-    backendDiag.innerText = 'Send OTP failed: ' + (res.error || 'unknown') + '. If CORS error appears in console, enable CORS on backend or set proper Access-Control-Allow-Origin.';
-    setMessage('Failed to send OTP: ' + (res.error || 'unknown'), false);
-    alert('Failed to send OTP: ' + (res.error || 'unknown') + '\n\nCheck browser console for network/CORS details. If your backend is localhost and this page is not, use ngrok and paste its URL in Backend override.');
+  try{
+    const res = await tryPostWithFallback('/send-otp', { email: DEFAULT_RECIPIENT_EMAIL, otp: '', key: keyVal });
+    if(!res.ok){
+      explainFailure('send-otp: server-response', res.error || res);
+      return res;
+    }
+    setMessage('OTP request accepted by ' + res.base, true);
     return res;
+  }catch(err){
+    explainFailure('send-otp: fetch-failed', err);
+    return { ok:false, error: err.message || String(err) };
   }
-  setMessage('OTP request accepted by ' + res.base, true);
-  return res;
 }
 
-// Verify OTP: user must paste OTP they received in email; calls backend verify
+// Verify OTP
 async function verifyOtpOnServer(otp, keyVal){
   setMessage('Verifying OTP...', true);
-  const res = await tryPostWithFallback('/verify-otp', { otp, key: keyVal });
-  if(!res.ok){
-    backendOverrideWrap.style.display = 'block';
-    backendDiag.innerText = 'Verify failed: ' + (res.error || 'unknown');
-    setMessage('OTP verify failed: ' + (res.error || 'unknown'), false);
+  try{
+    const res = await tryPostWithFallback('/verify-otp', { otp, key: keyVal });
+    if(!res.ok){
+      explainFailure('verify-otp: server-response', res.error || res);
+      return res;
+    }
+    setMessage('OTP verified by ' + res.base, true);
     return res;
+  }catch(err){
+    explainFailure('verify-otp: fetch-failed', err);
+    return { ok:false, error: err.message || String(err) };
   }
-  setMessage('OTP verified by ' + res.base, true);
-  return res;
 }
 
-// presign + upload helper (same as before, with override support)
+// Perform presign + PUT upload
 async function requestPresignAndUpload(file, keyVal, otpForPresign){
   setProgress(0);
   setMessage('Requesting presigned URL...', true);
 
-  // if manualPut provided, skip presign
+  // manual PUT override - if user provided a full PUT URL, use it
   let presignUrl = manualPut.value.trim();
   let realKey = keyVal;
+
   if(!presignUrl){
-    // try hosts in fallback order including override
     const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
     const hosts = [];
     if(overrideVal) hosts.push(overrideVal.replace(/\/$/,''));
@@ -358,15 +424,20 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
     if(!presignUrl){
       const msg = 'Presign failed: ' + (lastErr ? (lastErr.message || String(lastErr)) : 'no-host');
       setMessage(msg, false);
-      alert(msg + '\n\nIf your backend is on localhost and this page is hosted remotely, use ngrok and paste the URL in the Backend override.');
+      explainFailure('presign', lastErr || 'no presign url received');
       throw new Error(msg);
     }
   }
 
-  // perform PUT upload
-  await xhrUpload(presignUrl, file);
+  // actual upload via PUT (XHR to get progress)
+  try{
+    await xhrUpload(presignUrl, file);
+  }catch(e){
+    explainFailure('upload-put', e);
+    throw e;
+  }
 
-  // register metadata (try API_BASE then BACKEND_BASE)
+  // Try to notify backend about file (metadata registration) — best-effort
   try {
     const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
     const metaHosts = [];
@@ -381,7 +452,7 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
     }
   }catch(e){ console.warn('metadata registration failed', e); }
 
-  // success UI update
+  // success
   files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: undefined });
   saveLocalFiles();
   setMessage('Upload finished: ' + realKey, true);
@@ -391,106 +462,7 @@ async function requestPresignAndUpload(file, keyVal, otpForPresign){
   fileInput.value = ''; keyInput.value=''; manualPut.value='';
 }
 
-// upload button flow
-uploadBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  if(!file) return alert('Pick a file to upload');
-  let keyVal = keyInput.value.trim() || file.name;
-  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-
-  // OTP not selected -> direct presign+upload
-  if(!chkOtp.checked){
-    try{
-      await requestPresignAndUpload(file, keyVal);
-    }catch(e){
-      console.error(e);
-    }
-    return;
-  }
-
-  // OTP selected: verify typed OTP (if present) or send OTP and pause
-  const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
-  if(typedOtp){
-    // try verify then upload
-    setMessage('Verifying OTP...', true);
-    const vr = await verifyOtpOnServer(typedOtp, keyVal);
-    if(!vr.ok){
-      // show clear message
-      alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status)) + '\nCheck your backend logs or ensure you typed the OTP exactly as received.');
-      return;
-    }
-    // verified -> presign & upload including otp
-    try{
-      await requestPresignAndUpload(file, keyVal, typedOtp);
-    }catch(e){ console.error(e); }
-    return;
-  }
-
-  // no typed OTP: send OTP and pause — server generates & emails OTP
-  setMessage('Sending OTP to ' + DEFAULT_RECIPIENT_EMAIL + '...', true);
-  const sendRes = await sendOtpToServer(keyVal);
-  if(!sendRes.ok){
-    // sendOtpToServer handles showing diagnostics
-    return;
-  }
-  // sent OK -> set pending upload and instruct user to paste OTP and press Verify OTP
-  pendingUpload = { file, keyVal };
-  alert('An OTP has been sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Please check your email, paste the OTP in the inline box and press Verify OTP to continue the upload.');
-  setMessage('OTP sent — waiting for you to paste OTP and press Verify OTP', true);
-});
-
-// Verify OTP button (user-initiated)
-verifyOtpBtn.addEventListener('click', async ()=>{
-  const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
-  if(!typedOtp) return alert('Enter OTP you received in email.');
-  // determine key: prefer pendingUpload key if exists, else keyInput
-  let keyVal = keyInput.value.trim();
-  if(!keyVal && pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
-  if(!keyVal) return alert('Enter a key or start an upload so backend can verify OTP for that key.');
-  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-
-  setMessage('Verifying OTP...', true);
-  const vr = await verifyOtpOnServer(typedOtp, keyVal);
-  if(!vr.ok){
-    alert('OTP verify failed: ' + (vr.error || ('status ' + vr.status)));
-    return;
-  }
-  alert('OTP verified successfully. Upload will continue if it was pending.');
-  setMessage('OTP verified. Continuing upload...', true);
-  if(pendingUpload && pendingUpload.file){
-    try{
-      await requestPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp);
-    }catch(e){ console.error(e); }
-  }
-});
-
-// Send OTP explicit button
-sendOtpBtn.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  let keyVal = keyInput.value.trim() || (file ? file.name : '');
-  if(!keyVal) return alert('Enter key or choose a file to associate OTP with.');
-  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
-  const r = await sendOtpToServer(keyVal);
-  if(r.ok) alert('OTP request sent to server. Check email.');
-});
-
-// Manual presigned PUT upload (same behavior but ensures images/ prefix in stored key)
-uploadManual.addEventListener('click', async ()=>{
-  const file = fileInput.files[0];
-  const url = manualPut.value.trim();
-  if(!file || !url) return alert('Select file and paste a presigned PUT URL');
-  try{
-    setMessage('Uploading via pasted PUT URL...');
-    await xhrUpload(url, file);
-    let derivedKey = url.split('?')[0].split('/').slice(3).join('/') || file.name;
-    if(!derivedKey.startsWith('images/')) derivedKey = 'images/' + derivedKey;
-    files.unshift({ key: derivedKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url });
-    saveLocalFiles();
-    renderFiles();
-    setMessage('Manual upload finished', true);
-  }catch(e){ setMessage('Manual upload error: '+e.message, false); alert('Manual upload failed: ' + e.message); }
-});
-
+// XMLHttpRequest upload (to show progress)
 function xhrUpload(url, file){
   return new Promise((resolve,reject)=>{
     const xhr = new XMLHttpRequest();
@@ -502,7 +474,7 @@ function xhrUpload(url, file){
   });
 }
 
-// Presign GET helper (unchanged)
+// Request presigned GET
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
   const overrideVal = (backendOverride && backendOverride.value && backendOverride.value.trim()) ? backendOverride.value.trim() : null;
@@ -518,10 +490,10 @@ async function requestGetPresign(key){
     const j = await resp.json();
     getUrlInput.value = j.url;
     alert('Presigned GET placed in the input');
-  }catch(e){ alert('Error requesting GET presign: '+e.message); }
+  }catch(e){ explainFailure('presign-get', e); }
 }
 
-// Files UI & metadata (unchanged behavior)
+// File list UI
 function updateCounts(){
   const all = files.filter(f=>!f.deleted).length;
   const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
@@ -574,10 +546,11 @@ function renderFiles(){
   updateCounts();
 }
 
-function seedDemoIfNeeded(){ if(API_BASE) return; if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
+// demo seed if no API and no stored
+function seedDemoIfNeeded(){ if(loadLocalFiles()) return; files=[{ key:'images/test.jpg', name:'images/test.jpg', size:24567, modified:nowMs()-86400000*2, star:false, deleted:false }]; saveLocalFiles(); }
 seedDemoIfNeeded();
 
-// UI wiring
+// UI wiring and flows
 document.getElementById('searchBtn').addEventListener('click', ()=> renderFiles());
 document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
 document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
@@ -593,12 +566,106 @@ function updateCheckboxUI(){
 }
 updateCheckboxUI();
 
+// upload button main flow
+uploadBtn.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  if(!file) return alert('Pick a file to upload');
+  let keyVal = keyInput.value.trim() || file.name;
+  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
+
+  // OTP not selected -> direct presign+upload
+  if(!chkOtp.checked){
+    try{
+      await requestPresignAndUpload(file, keyVal);
+    }catch(e){
+      console.error(e);
+    }
+    return;
+  }
+
+  // OTP selected: verify typed OTP (if present) or send OTP and pause
+  const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
+  if(typedOtp){
+    setMessage('Verifying OTP...', true);
+    const vr = await verifyOtpOnServer(typedOtp, keyVal);
+    if(!vr.ok){
+      alert('OTP verification failed: ' + (vr.error || ('status ' + vr.status)) + '\nCheck your backend logs or ensure you typed the OTP exactly as received.');
+      return;
+    }
+    try{
+      await requestPresignAndUpload(file, keyVal, typedOtp);
+    }catch(e){ console.error(e); }
+    return;
+  }
+
+  // no typed OTP: send OTP and pause
+  setMessage('Sending OTP to ' + DEFAULT_RECIPIENT_EMAIL + '...', true);
+  const sendRes = await sendOtpToServer(keyVal);
+  if(!sendRes.ok){
+    return;
+  }
+  pendingUpload = { file, keyVal };
+  alert('An OTP has been sent to ' + DEFAULT_RECIPIENT_EMAIL + '. Please check your email, paste the OTP in the inline box and press Verify OTP to continue the upload.');
+  setMessage('OTP sent — waiting for you to paste OTP and press Verify OTP', true);
+});
+
+// Verify OTP button
+verifyOtpBtn.addEventListener('click', async ()=>{
+  const typedOtp = otpInline && otpInline.value ? otpInline.value.trim() : '';
+  if(!typedOtp) return alert('Enter OTP you received in email.');
+  let keyVal = keyInput.value.trim();
+  if(!keyVal && pendingUpload && pendingUpload.keyVal) keyVal = pendingUpload.keyVal;
+  if(!keyVal) return alert('Enter a key or start an upload so backend can verify OTP for that key.');
+  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
+
+  setMessage('Verifying OTP...', true);
+  const vr = await verifyOtpOnServer(typedOtp, keyVal);
+  if(!vr.ok){
+    alert('OTP verify failed: ' + (vr.error || ('status ' + vr.status)));
+    return;
+  }
+  alert('OTP verified successfully. Upload will continue if it was pending.');
+  setMessage('OTP verified. Continuing upload...', true);
+  if(pendingUpload && pendingUpload.file){
+    try{
+      await requestPresignAndUpload(pendingUpload.file, pendingUpload.keyVal, typedOtp);
+    }catch(e){ console.error(e); }
+  }
+});
+
+// explicit Send OTP button
+sendOtpBtn.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  let keyVal = keyInput.value.trim() || (file ? file.name : '');
+  if(!keyVal) return alert('Enter key or choose a file to associate OTP with.');
+  if(!keyVal.startsWith('images/')) keyVal = 'images/' + keyVal;
+  const r = await sendOtpToServer(keyVal);
+  if(r.ok) alert('OTP request sent to server. Check email.');
+});
+
+// Manual presigned PUT upload
+uploadManual.addEventListener('click', async ()=>{
+  const file = fileInput.files[0];
+  const url = manualPut.value.trim();
+  if(!file || !url) return alert('Select file and paste a presigned PUT URL');
+  try{
+    setMessage('Uploading via pasted PUT URL...');
+    await xhrUpload(url, file);
+    let derivedKey = url.split('?')[0].split('/').slice(3).join('/') || file.name;
+    if(!derivedKey.startsWith('images/')) derivedKey = 'images/' + derivedKey;
+    files.unshift({ key: derivedKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url });
+    saveLocalFiles();
+    renderFiles();
+    setMessage('Manual upload finished', true);
+  }catch(e){ setMessage('Manual upload error: '+e.message, false); explainFailure('manual-put', e); }
+});
+
+// open GET URL / request presign
 document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
 renderFiles();
 updateCounts();
-
 </script>
 </body>
 </html>
