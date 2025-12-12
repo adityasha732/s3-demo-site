@@ -32,6 +32,8 @@
     .btn-outline-warning { color: #b45309; border-color:#fbbf24; }
     .otp-row { margin-top:12px; }
     .small-checkbox { margin-right:10px; display:inline-flex; align-items:center; gap:6px; }
+    /* smaller inline otp input */
+    #otpInline { width:110px; margin-left:8px; }
   </style>
 </head>
 <body>
@@ -74,11 +76,10 @@
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
 
-      <!-- NEW: recipient email for OTP -->
+      <!-- Recipient email is now fixed and not editable -->
       <div class="mt-3">
-        <small class="muted">Recipient email (for OTP):</small>
-        <input id="recipientEmail" class="form-control form-control-sm mt-1" placeholder="you@example.com">
-        <div class="muted small mt-1">OTP will be emailed to this address.</div>
+        <small class="muted">Recipient email (OTP will be sent here):</small>
+        <div class="muted small mt-1">shaaditya87@gmail.com</div>
       </div>
 
       <!-- OTP input row -->
@@ -120,7 +121,11 @@
         <!-- New checkboxes for OTP / Presigned upload -->
         <div class="row g-2 mt-3">
           <div class="col-12">
-            <label class="small-checkbox"><input type="checkbox" id="chkOtp"> Use OTP</label>
+            <label class="small-checkbox">
+              <input type="checkbox" id="chkOtp"> Use OTP
+            </label>
+            <!-- inline OTP input (hidden until chkOtp checked) -->
+            <input type="text" id="otpInline" placeholder="Enter OTP" style="display:none" class="form-control form-control-sm">
             <label class="small-checkbox"><input type="checkbox" id="chkPresign"> Use Presigned URL</label>
 
             <!-- Send OTP button (hidden unless chkOtp checked) -->
@@ -201,6 +206,9 @@ const API_BASE = 'http://localhost:8080';
 // You said your OTP server runs on port 3000 locally, so point BACKEND_BASE there.
 const BACKEND_BASE = 'http://localhost:3000';
 
+// DEFAULT recipient (no editable field)
+const DEFAULT_RECIPIENT_EMAIL = 'shaaditya87@gmail.com';
+
 // ---------- Auth helpers ----------
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
 function getToken(){ return localStorage.getItem('cv_token'); }
@@ -233,12 +241,12 @@ const filesGrid = document.getElementById('filesGrid');
 const getUrlInput = document.getElementById('getUrlInput');
 const manualOtpInput = document.getElementById('manualOtp');
 const applyOtpBtn = document.getElementById('applyOtpBtn');
-const recipientEmailInput = document.getElementById('recipientEmail');
 
 const chkOtp = document.getElementById('chkOtp');
 const chkPresign = document.getElementById('chkPresign');
 const sendOtpBtn = document.getElementById('sendOtpBtn');
 const manualPutHint = document.getElementById('manualPutHint');
+const otpInline = document.getElementById('otpInline');
 
 // ---------- Persistence ----------
 const STORE_KEY = 'cv_files_v1';
@@ -573,7 +581,7 @@ uploadBtn.addEventListener('click', async ()=>{
 
     // ---- NEW: OTP handling + popup ----
     let otpToUse = manualOtp || generateOtp(6);
-    const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
+    const email = DEFAULT_RECIPIENT_EMAIL;
 
     if(!BACKEND_BASE && !API_BASE){
       // demo mode – cannot send email
@@ -583,6 +591,9 @@ uploadBtn.addEventListener('click', async ()=>{
         const r = await emailOtpToRecipient(BACKEND_BASE, email, otpToUse, realKey);
         if(r.ok){
           alert('OTP ' + otpToUse + ' sent to ' + email + ' (via ' + r.which + ')');
+          // put OTP into inline box and manual OTP field for convenience
+          if(otpInline) otpInline.value = otpToUse;
+          if(manualOtpInput) manualOtpInput.value = otpToUse;
         } else {
           alert('Upload complete.\nOTP: ' + otpToUse + '\nEmail sending failed. Details: ' + (r.error || 'unknown'));
         }
@@ -690,11 +701,13 @@ applyOtpBtn.addEventListener('click', ()=>{
 
 // ---------- Checkbox behavior: show/hide controls ----------
 function updateCheckboxUI(){
-  // OTP checkbox controls sendOtpBtn
+  // OTP checkbox controls sendOtpBtn and inline otp input
   if(chkOtp.checked){
     sendOtpBtn.style.display = 'inline-block';
+    otpInline.style.display = 'inline-block';
   } else {
     sendOtpBtn.style.display = 'none';
+    otpInline.style.display = 'none';
   }
 
   // Presigned checkbox controls manualPut & uploadManual
@@ -716,8 +729,7 @@ updateCheckboxUI(); // initial
 sendOtpBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   const keyVal = keyInput.value.trim() || (file ? file.name : '');
-  const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
-  if(!email) return alert('Set recipient email in the sidebar before sending OTP.');
+  const email = DEFAULT_RECIPIENT_EMAIL;
   if(!keyVal) return alert('Enter a key or choose a file so a key can be associated with the OTP.');
 
   const otp = generateOtp(6);
@@ -726,6 +738,9 @@ sendOtpBtn.addEventListener('click', async ()=>{
     const r = await emailOtpToRecipient(BACKEND_BASE, email, otp, keyVal);
     if(r.ok) {
       alert('OTP ' + otp + ' sent to ' + email + ' (via ' + r.which + ')');
+      // put OTP into inline box and manual OTP field for convenience
+      if(otpInline) otpInline.value = otp;
+      if(manualOtpInput) manualOtpInput.value = otp;
     } else {
       alert('Failed to send OTP. Details: ' + (r.error || 'unknown'));
     }
@@ -734,6 +749,11 @@ sendOtpBtn.addEventListener('click', async ()=>{
   } finally {
     setMessage('', true);
   }
+});
+
+// If user types OTP in inline box we also mirror it to the manual OTP sidebar input
+otpInline.addEventListener('input', ()=> {
+  if(manualOtpInput) manualOtpInput.value = otpInline.value;
 });
 
 // ---------- Initial render ----------
