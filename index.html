@@ -20,7 +20,7 @@
     .actions button{margin-right:6px}
     .grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
     .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9}
-    .progress { background:#e9eef8; height:18px; border-radius:10px; overflow:visible; }
+    .progress { background:#e9eef8; height:18px; border-radius:18px; overflow:visible; }
     .progress-bar { background: var(--accent); transition: width 200ms linear; height:100%; }
     #progressWrap { position:relative; }
     #progressLabel { position:relative; margin-top:6px; text-align:center; font-weight:600; color:#fff; margin-left:auto; margin-right:auto; width:100%; transform: translateY(-28px); pointer-events:none; }
@@ -71,7 +71,7 @@
       <a href="#" class="nav-item" data-view="trash">Trash <span id="countTrash" class="meta-muted"></span></a>
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
-      <!-- NOTE: old OTP/email hints removed from sidebar as requested -->
+      <!-- No OTP/email text in sidebar as requested -->
     </aside>
 
     <main class="flex-grow-1 p-4">
@@ -96,28 +96,18 @@
           </div>
         </div>
 
-        <!-- Common file/key/password row -->
+        <!-- File only (no storage key, no password) -->
         <div class="row g-2 align-items-center mt-3">
           <div class="col-auto">
             <input id="fileInput" type="file" class="form-control form-control-sm">
-          </div>
-          <div class="col-auto">
-            <input id="keyInput" type="text" class="form-control form-control-sm" placeholder="storage key (optional)">
-          </div>
-          <div class="col-auto">
-            <input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password (optional)">
           </div>
         </div>
 
         <!-- OTP FLOW SECTION -->
         <div id="otpSection" class="otp-section" style="display:none;">
           <div class="row g-2 align-items-center">
-            <div class="col-md-5">
-              <label class="small mb-1">Recipient email (for OTP)</label>
-              <input id="recipientEmail" class="form-control form-control-sm" value="shaaditya87@gmail.com">
-            </div>
             <div class="col-md-3 d-grid">
-              <button id="sendOtpBtn" class="btn btn-sm btn-outline-primary mt-4">Send OTP</button>
+              <button id="sendOtpBtn" class="btn btn-sm btn-outline-primary">Send OTP</button>
             </div>
           </div>
 
@@ -147,7 +137,7 @@
           <div class="muted small mt-2">Use a presigned URL you obtained from another service or backend.</div>
         </div>
 
-        <!-- Legacy default upload button (still available if no option chosen) -->
+        <!-- Default auto-presign upload (optional fallback) -->
         <div class="row g-2 align-items-center mt-3">
           <div class="col-auto">
             <button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload (auto presign)</button>
@@ -223,8 +213,6 @@ let view = 'all';
 let renderMode = 'list';
 
 const fileInput = document.getElementById('fileInput');
-const keyInput = document.getElementById('keyInput');
-const pwInput = document.getElementById('pwInput');
 const uploadBtn = document.getElementById('uploadBtn');
 const uploadManual = document.getElementById('uploadManual');
 const uploadWithOtpBtn = document.getElementById('uploadWithOtpBtn');
@@ -237,7 +225,6 @@ const filesList = document.getElementById('filesList');
 const filesGrid = document.getElementById('filesGrid');
 const getUrlInput = document.getElementById('getUrlInput');
 const manualOtpInput = document.getElementById('manualOtp');
-const recipientEmailInput = document.getElementById('recipientEmail');
 const useOtpChk = document.getElementById('useOtpChk');
 const usePresignChk = document.getElementById('usePresignChk');
 const otpSection = document.getElementById('otpSection');
@@ -271,6 +258,7 @@ async function emailOtpToRecipient(backendBase, email, otp, key){
   const resp = await fetch(backendBase + '/send-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    // email can be null; backend uses default email
     body: JSON.stringify({ email, otp, key })
   });
   let j = {};
@@ -466,11 +454,11 @@ function openPresigned(url, key){
   requestGetPresign(encodeURIComponent(key));
 }
 
-// Upload logic used by auto button and OTP button
+// Shared upload flow (auto and OTP)
 async function doUploadFlow(manualOtp){
   const file = fileInput.files[0];
   if(!file) throw new Error('Pick a file to upload');
-  const keyVal = keyInput.value.trim() || file.name;
+  const keyVal = file.name; // no storage key input now
 
   setProgress(0);
   setMessage('Requesting presigned URL...', true);
@@ -538,13 +526,13 @@ async function doUploadFlow(manualOtp){
   setMessage('Upload finished: ' + realKey, true);
   setProgress(100);
   renderFiles();
-  fileInput.value=''; keyInput.value=''; pwInput.value='';
+  fileInput.value='';
 }
 
 // buttons
 uploadBtn.addEventListener('click', async ()=>{
   try{
-    await doUploadFlow(''); // no OTP, just like original auto flow
+    await doUploadFlow(''); // no OTP
   }catch(err){
     console.error(err);
     setMessage('Upload error: '+(err.message||err), false);
@@ -557,8 +545,7 @@ uploadWithOtpBtn.addEventListener('click', async ()=>{
   if(!otp) { alert('Enter OTP before uploading'); return; }
   try{
     await doUploadFlow(otp);
-    const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
-    alert('Upload complete using OTP ' + otp + (email ? (' for ' + email) : ''));
+    alert('Upload complete using OTP.');
   }catch(err){
     console.error(err);
     setMessage('Upload error: '+(err.message||err), false);
@@ -567,18 +554,16 @@ uploadWithOtpBtn.addEventListener('click', async ()=>{
 });
 
 sendOtpBtn.addEventListener('click', async ()=>{
-  const email = (recipientEmailInput.value || '').trim();
-  if(!email) { alert('Enter an email address'); return; }
   const otp = generateOtp(6);
   try{
-    const r = await emailOtpToRecipient(BACKEND_BASE, email, otp, null);
+    const r = await emailOtpToRecipient(BACKEND_BASE, null, otp, null);
     if(r.ok){
-      alert('OTP ' + otp + ' sent to ' + email);
+      alert('OTP has been sent to your registered email.');
     } else {
-      alert('Failed to send OTP. Check backend.');
+      alert('Failed to send OTP. Please try again.');
     }
   }catch(e){
-    alert('Error while sending OTP email: ' + e.message);
+    alert('Error while sending OTP. Please try again later.');
   }
 });
 
@@ -665,7 +650,7 @@ document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.
 
 document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
 
-// make checkboxes mutually exclusive and toggle sections
+// mutually exclusive checkboxes and sections
 useOtpChk.addEventListener('change', ()=>{
   if(useOtpChk.checked){
     usePresignChk.checked = false;
