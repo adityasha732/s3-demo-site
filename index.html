@@ -18,7 +18,6 @@
     .muted{color:var(--muted)}
     .small{font-size:.9rem}
     .actions button{margin-right:6px}
-    .star{cursor:pointer}
     .grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
     .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9}
     .progress { background:#e9eef8; height:18px; border-radius:10px; overflow:visible; }
@@ -30,7 +29,8 @@
     .nav-item.active { color:var(--accent); font-weight:700; }
     .meta-muted { color:#94a3b8; font-size:.85rem; }
     .btn-outline-warning { color: #b45309; border-color:#fbbf24; }
-    .otp-row { margin-top:12px; }
+    .otp-section, .presign-section { border:1px solid #e5e7eb; border-radius:8px; padding:10px; margin-top:8px; background:#f9fafb; }
+    .option-row { margin-top:10px; }
   </style>
 </head>
 <body>
@@ -71,23 +71,7 @@
       <a href="#" class="nav-item" data-view="trash">Trash <span id="countTrash" class="meta-muted"></span></a>
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
-
-      <!-- Recipient email for OTP -->
-      <div class="mt-3">
-        <small class="muted">Recipient email (for OTP):</small>
-        <input id="recipientEmail" class="form-control form-control-sm mt-1" placeholder="you@example.com">
-        <div class="muted small mt-1">OTP will be emailed to this address.</div>
-      </div>
-
-      <!-- OTP input row -->
-      <div class="otp-row">
-        <small class="muted">OTP (optional):</small>
-        <div class="d-flex mt-1">
-          <input id="manualOtp" class="form-control form-control-sm" placeholder="paste OTP here">
-          <button id="applyOtpBtn" class="btn btn-sm btn-outline-secondary ms-2">Apply</button>
-        </div>
-        <div class="muted small mt-1">If you paste an OTP here it will be used for the next upload or download (decrypt).</div>
-      </div>
+      <!-- NOTE: old OTP/email hints removed from sidebar as requested -->
     </aside>
 
     <main class="flex-grow-1 p-4">
@@ -96,10 +80,23 @@
         <div class="d-flex justify-content-between align-items-start mb-2">
           <div>
             <h5 class="m-0">Upload (presigned PUT)</h5>
-            <div class="muted small">This frontend requests presigned PUT URLs from your backend, uploads directly to S3, then optionally notifies your backend to record metadata.</div>
+            <div class="muted small">Choose OTP flow or presigned URL flow, then upload your file.</div>
           </div>
         </div>
 
+        <!-- Mode selection -->
+        <div class="option-row d-flex align-items-center gap-3">
+          <div>
+            <input type="checkbox" id="useOtpChk">
+            <label for="useOtpChk" class="small">Use OTP flow</label>
+          </div>
+          <div>
+            <input type="checkbox" id="usePresignChk">
+            <label for="usePresignChk" class="small">Use presigned URL flow</label>
+          </div>
+        </div>
+
+        <!-- Common file/key/password row -->
         <div class="row g-2 align-items-center mt-3">
           <div class="col-auto">
             <input id="fileInput" type="file" class="form-control form-control-sm">
@@ -110,18 +107,50 @@
           <div class="col-auto">
             <input id="pwInput" type="password" class="form-control form-control-sm" placeholder="upload password (optional)">
           </div>
-          <div class="col-auto">
-            <button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload</button>
-          </div>
         </div>
 
-        <div class="row g-2 mt-3">
-          <div class="col-md-8">
-            <input id="manualPut" class="form-control form-control-sm" placeholder="(Fallback) paste presigned PUT URL here">
-            <div class="muted small mt-1">If you have a Java app that generates a presigned PUT URL, paste it here and click "Upload using PUT".</div>
+        <!-- OTP FLOW SECTION -->
+        <div id="otpSection" class="otp-section" style="display:none;">
+          <div class="row g-2 align-items-center">
+            <div class="col-md-5">
+              <label class="small mb-1">Recipient email (for OTP)</label>
+              <input id="recipientEmail" class="form-control form-control-sm" value="shaaditya87@gmail.com">
+            </div>
+            <div class="col-md-3 d-grid">
+              <button id="sendOtpBtn" class="btn btn-sm btn-outline-primary mt-4">Send OTP</button>
+            </div>
           </div>
-          <div class="col-md-4 d-grid">
-            <button id="uploadManual" class="btn btn-outline-secondary btn-sm">Upload using pasted PUT URL</button>
+
+          <div class="row g-2 align-items-center mt-3">
+            <div class="col-md-4">
+              <label class="small mb-1">Enter OTP</label>
+              <input id="manualOtp" class="form-control form-control-sm" placeholder="enter OTP received on email">
+            </div>
+            <div class="col-md-4 d-grid">
+              <button id="uploadWithOtpBtn" class="btn btn-sm btn-primary mt-4">Submit OTP &amp; Upload</button>
+            </div>
+          </div>
+          <div class="muted small mt-2">OTP is used for this upload (and your backend can verify it).</div>
+        </div>
+
+        <!-- PRESIGNED URL FLOW SECTION -->
+        <div id="presignSection" class="presign-section" style="display:none;">
+          <div class="row g-2 align-items-center">
+            <div class="col-md-8">
+              <label class="small mb-1">Presigned PUT URL</label>
+              <input id="manualPut" class="form-control form-control-sm" placeholder="Paste presigned PUT URL here">
+            </div>
+            <div class="col-md-4 d-grid">
+              <button id="uploadManual" class="btn btn-outline-secondary btn-sm mt-4">Upload using URL</button>
+            </div>
+          </div>
+          <div class="muted small mt-2">Use a presigned URL you obtained from another service or backend.</div>
+        </div>
+
+        <!-- Legacy default upload button (still available if no option chosen) -->
+        <div class="row g-2 align-items-center mt-3">
+          <div class="col-auto">
+            <button id="uploadBtn" class="btn btn-sm" style="background:var(--accent);color:#fff">Upload (auto presign)</button>
           </div>
         </div>
 
@@ -158,9 +187,9 @@
         </div>
       </div>
 
-      <!-- Download Panel -->
+      <!-- Download via presigned GET URL -->
       <div class="card-panel mt-4">
-        <h6 class="m-0">Download / Get Presigned GET</h6>
+        <h6 class="m-0">Download using presigned URL</h6>
         <div class="row g-2 mt-2">
           <div class="col-md-8">
             <input id="getUrlInput" class="form-control form-control-sm" placeholder="Paste presigned GET URL (or the output will be placed here)">
@@ -198,7 +227,8 @@ const keyInput = document.getElementById('keyInput');
 const pwInput = document.getElementById('pwInput');
 const uploadBtn = document.getElementById('uploadBtn');
 const uploadManual = document.getElementById('uploadManual');
-const manualPut = document.getElementById('manualPut');
+const uploadWithOtpBtn = document.getElementById('uploadWithOtpBtn');
+const sendOtpBtn = document.getElementById('sendOtpBtn');
 const uploadMsg = document.getElementById('uploadMsg');
 const progressWrap = document.getElementById('progressWrap');
 const progressBar = document.getElementById('progressBar');
@@ -207,8 +237,12 @@ const filesList = document.getElementById('filesList');
 const filesGrid = document.getElementById('filesGrid');
 const getUrlInput = document.getElementById('getUrlInput');
 const manualOtpInput = document.getElementById('manualOtp');
-const applyOtpBtn = document.getElementById('applyOtpBtn');
 const recipientEmailInput = document.getElementById('recipientEmail');
+const useOtpChk = document.getElementById('useOtpChk');
+const usePresignChk = document.getElementById('usePresignChk');
+const otpSection = document.getElementById('otpSection');
+const presignSection = document.getElementById('presignSection');
+const manualPut = document.getElementById('manualPut');
 
 const STORE_KEY = 'cv_files_v1';
 function saveLocalFiles(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
@@ -223,7 +257,7 @@ function generateOtp(len=6){
   return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0");
 }
 
-// safe JSON helper to avoid breaking on non‑JSON error pages
+// safe JSON helper
 async function safeJson(resp){
   const ct = resp.headers.get('content-type') || '';
   if(ct.includes('application/json')){
@@ -240,7 +274,7 @@ async function emailOtpToRecipient(backendBase, email, otp, key){
     body: JSON.stringify({ email, otp, key })
   });
   let j = {};
-  try { j = await safeJson(resp); } catch(e) { /* ignore parse error, rely on resp.ok */ }
+  try { j = await safeJson(resp); } catch(e) {}
   return { ok: resp.ok, json: j };
 }
 
@@ -432,110 +466,119 @@ function openPresigned(url, key){
   requestGetPresign(encodeURIComponent(key));
 }
 
-// Upload flows (+ OTP email)
-uploadBtn.addEventListener('click', async ()=>{
+// Upload logic used by auto button and OTP button
+async function doUploadFlow(manualOtp){
   const file = fileInput.files[0];
-  if(!file) return alert('Pick a file to upload');
+  if(!file) throw new Error('Pick a file to upload');
   const keyVal = keyInput.value.trim() || file.name;
 
-  const manualOtp = (manualOtpInput && manualOtpInput.value) ? manualOtpInput.value.trim() : '';
+  setProgress(0);
+  setMessage('Requesting presigned URL...', true);
+  let presignUrl = manualPut.value.trim();
+  let realKey = keyVal;
+  let presignResponseJson = null;
 
-  try{
-    setProgress(0);
-    setMessage('Requesting presigned URL...', true);
-    let presignUrl = manualPut.value.trim();
-    let realKey = keyVal;
-    let presignResponseJson = null;
+  async function tryPresign(baseUrl){
+    const body = { filename:file.name, contentType:file.type, key: keyVal };
+    if(manualOtp){ body.otp = manualOtp; }
+    const resp = await fetch(baseUrl + '/presign', {
+      method:'POST',
+      headers: authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify(body)
+    });
+    if(!resp.ok) throw new Error('Presign request failed: ' + resp.status + ' @ ' + baseUrl);
+    return await safeJson(resp);
+  }
 
-    // helper to try a presign endpoint (returns json or throws)
-    async function tryPresign(baseUrl){
-      const body = { filename:file.name, contentType:file.type, key: keyVal };
-      if(manualOtp){  // only send otp if user actually provided it
-        body.otp = manualOtp;
+  if(!presignUrl){
+    try {
+      presignResponseJson = await tryPresign(API_BASE);
+    } catch(primaryErr) {
+      console.warn('Primary presign failed:', primaryErr);
+      try {
+        presignResponseJson = await tryPresign(BACKEND_BASE);
+      } catch(fallbackErr) {
+        console.error('Fallback presign failed:', fallbackErr);
+        throw new Error('Presign failed on both API_BASE and BACKEND_BASE.');
       }
-      const resp = await fetch(baseUrl + '/presign', {
+    }
+
+    if(presignResponseJson){
+      presignUrl = presignResponseJson.url;
+      realKey = presignResponseJson.key || keyVal;
+    }
+  }
+
+  if(!presignUrl) throw new Error('No presigned URL available');
+
+  await xhrUpload(presignUrl, file);
+
+  try {
+    if(API_BASE){
+      await fetch(API_BASE + '/files', {
         method:'POST',
         headers: authHeaders({'Content-Type':'application/json'}),
-        body: JSON.stringify(body)
+        body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
       });
-      if(!resp.ok) throw new Error('Presign request failed: ' + resp.status + ' @ ' + baseUrl);
-      return await safeJson(resp);
     }
-
-    if(!presignUrl){
-      try {
-        presignResponseJson = await tryPresign(API_BASE);
-      } catch(primaryErr) {
-        console.warn('Primary presign failed:', primaryErr);
-        try {
-          presignResponseJson = await tryPresign(BACKEND_BASE);
-        } catch(fallbackErr) {
-          console.error('Fallback presign failed:', fallbackErr);
-          throw new Error('Presign failed on both API_BASE and BACKEND_BASE.');
-        }
-      }
-
-      if(presignResponseJson){
-        presignUrl = presignResponseJson.url;
-        realKey = presignResponseJson.key || keyVal;
-      }
-    }
-
-    if(!presignUrl) throw new Error('No presigned URL available');
-
-    await xhrUpload(presignUrl, file);
-
+  } catch(e){
     try {
-      if(API_BASE){
-        await fetch(API_BASE + '/files', {
-          method:'POST',
-          headers: authHeaders({'Content-Type':'application/json'}),
-          body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
-        });
-      }
-    } catch(e){
-      try {
-        await fetch(BACKEND_BASE + '/files', {
-          method:'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
-        });
-      } catch(e2){
-        console.warn('Could not register metadata on either API_BASE or BACKEND_BASE', e, e2);
-      }
+      await fetch(BACKEND_BASE + '/files', {
+        method:'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ key: realKey, name: file.name, size: file.size, contentType: file.type })
+      });
+    } catch(e2){
+      console.warn('Could not register metadata on either API_BASE or BACKEND_BASE', e, e2);
     }
+  }
 
-    files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
-    saveLocalFiles();
-    setMessage('Upload finished: ' + realKey, true);
-    setProgress(100);
-    renderFiles();
-    fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
+  files.unshift({ key: realKey, name: file.name, size: file.size, contentType: file.type, modified: nowMs(), star:false, deleted:false, url: API_BASE ? undefined : presignUrl });
+  saveLocalFiles();
+  setMessage('Upload finished: ' + realKey, true);
+  setProgress(100);
+  renderFiles();
+  fileInput.value=''; keyInput.value=''; pwInput.value='';
+}
 
-    // OTP handling + popup
-    let otpToUse = manualOtp || generateOtp(6);
-    const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
-
-    if(!BACKEND_BASE){
-      alert('Upload complete.\nOTP: ' + otpToUse + '\n(No email backend configured.)');
-    } else if(email){
-      try{
-        const r = await emailOtpToRecipient(BACKEND_BASE, email, otpToUse, realKey);
-        if(r.ok){
-          alert('OTP ' + otpToUse + ' sent to ' + email);
-        } else {
-          alert('Upload complete.\nOTP: ' + otpToUse + '\nEmail sending failed. Check backend.');
-        }
-      }catch(e){
-        alert('Upload complete.\nOTP: ' + otpToUse + '\nError while sending email: ' + e.message);
-      }
-    } else {
-      alert('Upload complete.\nOTP: ' + otpToUse + '\n(No recipient email set.)');
-    }
+// buttons
+uploadBtn.addEventListener('click', async ()=>{
+  try{
+    await doUploadFlow(''); // no OTP, just like original auto flow
   }catch(err){
     console.error(err);
     setMessage('Upload error: '+(err.message||err), false);
     setProgress(0);
+  }
+});
+
+uploadWithOtpBtn.addEventListener('click', async ()=>{
+  const otp = (manualOtpInput.value || '').trim();
+  if(!otp) { alert('Enter OTP before uploading'); return; }
+  try{
+    await doUploadFlow(otp);
+    const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
+    alert('Upload complete using OTP ' + otp + (email ? (' for ' + email) : ''));
+  }catch(err){
+    console.error(err);
+    setMessage('Upload error: '+(err.message||err), false);
+    setProgress(0);
+  }
+});
+
+sendOtpBtn.addEventListener('click', async ()=>{
+  const email = (recipientEmailInput.value || '').trim();
+  if(!email) { alert('Enter an email address'); return; }
+  const otp = generateOtp(6);
+  try{
+    const r = await emailOtpToRecipient(BACKEND_BASE, email, otp, null);
+    if(r.ok){
+      alert('OTP ' + otp + ' sent to ' + email);
+    } else {
+      alert('Failed to send OTP. Check backend.');
+    }
+  }catch(e){
+    alert('Error while sending OTP email: ' + e.message);
   }
 });
 
@@ -578,6 +621,7 @@ function setMessage(text, ok=true){
   setTimeout(()=>{ uploadMsg.textContent=''; }, 7000);
 }
 
+// GET presign and open
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
   if(!API_BASE) {
@@ -601,6 +645,7 @@ async function requestGetPresign(key){
 document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
+// view / search / list-grid
 document.querySelectorAll('.nav-item').forEach(el=>{
   el.addEventListener('click', (ev)=>{
     ev.preventDefault();
@@ -620,10 +665,25 @@ document.getElementById('gridViewBtn').addEventListener('click', ()=>{ document.
 
 document.getElementById('quickUpload').addEventListener('click', (e)=>{ e.preventDefault(); fileInput.click(); });
 
-applyOtpBtn.addEventListener('click', ()=>{
-  const v = (manualOtpInput.value || '').trim();
-  if(!v) return alert('Enter an OTP to apply');
-  alert('Manual OTP applied for next upload/download: ' + v);
+// make checkboxes mutually exclusive and toggle sections
+useOtpChk.addEventListener('change', ()=>{
+  if(useOtpChk.checked){
+    usePresignChk.checked = false;
+    otpSection.style.display = 'block';
+    presignSection.style.display = 'none';
+  } else {
+    otpSection.style.display = 'none';
+  }
+});
+
+usePresignChk.addEventListener('change', ()=>{
+  if(usePresignChk.checked){
+    useOtpChk.checked = false;
+    presignSection.style.display = 'block';
+    otpSection.style.display = 'none';
+  } else {
+    presignSection.style.display = 'none';
+  }
 });
 
 renderFiles();
