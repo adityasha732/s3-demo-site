@@ -35,7 +35,6 @@
 </head>
 <body>
   <div class="topbar">
-    <!-- logo with fallback attempts -->
     <img id="topLogo"
          src="asset/sing-crayon-shin-chan.gif"
          data-attempt="0"
@@ -73,7 +72,7 @@
       <hr>
       <a href="#" id="quickUpload" class="text-primary">+ New (Upload)</a>
 
-      <!-- NEW: recipient email for OTP -->
+      <!-- Recipient email for OTP -->
       <div class="mt-3">
         <small class="muted">Recipient email (for OTP):</small>
         <input id="recipientEmail" class="form-control form-control-sm mt-1" placeholder="you@example.com">
@@ -178,33 +177,22 @@
   </div>
 
 <script>
-/*
-  CloudVault demo front-end
-*/
-// keep API_BASE as your presign/backend host for presign & metadata
 const API_BASE = 'http://localhost:8080';
-
-// BACKEND_BASE must point to the service that exposes /send-otp (your Node OTP server).
-// You said your OTP server runs on port 3000 locally, so point BACKEND_BASE there.
 const BACKEND_BASE = 'http://localhost:3000';
 
-// ---------- Auth helpers ----------
 function setToken(t){ if(t) localStorage.setItem('cv_token', t); else localStorage.removeItem('cv_token'); }
 function getToken(){ return localStorage.getItem('cv_token'); }
 function authHeaders(h={}){ const t=getToken(); if(t) h['Authorization']='Bearer '+t; return h; }
 function updateUserInfo(){ document.getElementById('userInfo').textContent = getToken() ? 'Signed in' : ''; }
 updateUserInfo();
 
-// refresh when clicking title/logo
 document.getElementById('siteTitle').addEventListener('click', ()=> location.reload());
 document.getElementById('topLogo').addEventListener('click', ()=> location.reload());
 
-// ---------- State ----------
 let files = [];
 let view = 'all';
 let renderMode = 'list';
 
-// DOM refs
 const fileInput = document.getElementById('fileInput');
 const keyInput = document.getElementById('keyInput');
 const pwInput = document.getElementById('pwInput');
@@ -222,34 +210,40 @@ const manualOtpInput = document.getElementById('manualOtp');
 const applyOtpBtn = document.getElementById('applyOtpBtn');
 const recipientEmailInput = document.getElementById('recipientEmail');
 
-// ---------- Persistence ----------
 const STORE_KEY = 'cv_files_v1';
 function saveLocalFiles(){ localStorage.setItem(STORE_KEY, JSON.stringify(files)); updateCounts(); }
 function loadLocalFiles(){ const raw = localStorage.getItem(STORE_KEY); if(!raw) return false; try{ files = JSON.parse(raw); return true; }catch(e){ return false; } }
 
-// ---------- Utility ----------
 function nowMs(){ return Date.now(); }
-function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
+function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"'"}[c])); }
 function humanSize(n){ if(!n && n!==0) return ''; const units=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024 && i<units.length-1){ v/=1024; i++; } return Math.round(v*10)/10 + ' ' + units[i]; }
 function formatDate(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
 
-// NEW: OTP generator
 function generateOtp(len=6){
   return Math.floor(Math.random()*Math.pow(10,len)).toString().padStart(len,"0");
 }
 
-// NEW: call backend to send OTP email
+// safe JSON helper to avoid breaking on non‑JSON error pages
+async function safeJson(resp){
+  const ct = resp.headers.get('content-type') || '';
+  if(ct.includes('application/json')){
+    return resp.json();
+  }
+  const text = await resp.text();
+  throw new Error(text || ('HTTP '+resp.status));
+}
+
 async function emailOtpToRecipient(backendBase, email, otp, key){
   const resp = await fetch(backendBase + '/send-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, otp, key })
   });
-  const j = await resp.json().catch(()=>({}));
+  let j = {};
+  try { j = await safeJson(resp); } catch(e) { /* ignore parse error, rely on resp.ok */ }
   return { ok: resp.ok, json: j };
 }
 
-// ---------- Demo seed (if no backend and no saved data) ----------
 function seedDemoIfNeeded(){
   if(API_BASE) return;
   if(loadLocalFiles()) return;
@@ -262,13 +256,12 @@ function seedDemoIfNeeded(){
 }
 seedDemoIfNeeded();
 
-// ---------- Fetch files from backend (if configured) ----------
 async function fetchFilesFromBackend(){
   if(!API_BASE) return false;
   try{
     const resp = await fetch(API_BASE + '/files', { headers: authHeaders() });
     if(!resp.ok) throw new Error('Fetch files failed: '+resp.status);
-    const j = await resp.json();
+    const j = await safeJson(resp);
     files = j.map(x => ({ key:x.key, name:x.name || x.key.split('/').slice(-1).join('/'), size:x.size || 0, modified:x.modified || nowMs(), star:!!x.star, deleted:!!x.deleted, url:x.url }));
     saveLocalFiles();
     return true;
@@ -280,7 +273,6 @@ async function fetchFilesFromBackend(){
 
 (async ()=>{ if(API_BASE) await fetchFilesFromBackend(); renderFiles(); updateCounts(); })();
 
-// ---------- Render / Filtering ----------
 function updateCounts(){
   const all = files.filter(f=>!f.deleted).length;
   const recent = files.filter(f=>!f.deleted && (nowMs()- (f.modified||0) <= 1000*60*60*24*30)).length;
@@ -384,7 +376,6 @@ function guessEmojiForName(name){
   return '📁';
 }
 
-// ---------- Actions (star / delete etc.) ----------
 function toggleStar(key){
   const it = files.find(x=>x.key===key);
   if(!it) return;
@@ -441,15 +432,12 @@ function openPresigned(url, key){
   requestGetPresign(encodeURIComponent(key));
 }
 
-// ---------- Upload flows (+ OTP email) ----------
-// This upload flow first tries API_BASE + '/presign'. If that fails it will try BACKEND_BASE + '/presign' as fallback.
-// This is intentionally minimal and preserves your original behavior.
+// Upload flows (+ OTP email)
 uploadBtn.addEventListener('click', async ()=>{
   const file = fileInput.files[0];
   if(!file) return alert('Pick a file to upload');
   const keyVal = keyInput.value.trim() || file.name;
 
-  // manual OTP if user typed in sidebar
   const manualOtp = (manualOtpInput && manualOtpInput.value) ? manualOtpInput.value.trim() : '';
 
   try{
@@ -461,22 +449,24 @@ uploadBtn.addEventListener('click', async ()=>{
 
     // helper to try a presign endpoint (returns json or throws)
     async function tryPresign(baseUrl){
+      const body = { filename:file.name, contentType:file.type, key: keyVal };
+      if(manualOtp){  // only send otp if user actually provided it
+        body.otp = manualOtp;
+      }
       const resp = await fetch(baseUrl + '/presign', {
         method:'POST',
         headers: authHeaders({'Content-Type':'application/json'}),
-        body: JSON.stringify({ filename:file.name, contentType:file.type, key: keyVal, otp: manualOtp })
+        body: JSON.stringify(body)
       });
       if(!resp.ok) throw new Error('Presign request failed: ' + resp.status + ' @ ' + baseUrl);
-      return await resp.json();
+      return await safeJson(resp);
     }
 
-    if(!presignUrl){ // only call presign if manual PUT not provided
+    if(!presignUrl){
       try {
-        // primary attempt
         presignResponseJson = await tryPresign(API_BASE);
       } catch(primaryErr) {
         console.warn('Primary presign failed:', primaryErr);
-        // fallback attempt to BACKEND_BASE (often your OTP/email server might also host presign during testing)
         try {
           presignResponseJson = await tryPresign(BACKEND_BASE);
         } catch(fallbackErr) {
@@ -495,7 +485,6 @@ uploadBtn.addEventListener('click', async ()=>{
 
     await xhrUpload(presignUrl, file);
 
-    // Register metadata: try API_BASE then BACKEND_BASE as fallback (non-blocking)
     try {
       if(API_BASE){
         await fetch(API_BASE + '/files', {
@@ -505,7 +494,6 @@ uploadBtn.addEventListener('click', async ()=>{
         });
       }
     } catch(e){
-      // try fallback metadata endpoint on BACKEND_BASE
       try {
         await fetch(BACKEND_BASE + '/files', {
           method:'POST',
@@ -524,12 +512,11 @@ uploadBtn.addEventListener('click', async ()=>{
     renderFiles();
     fileInput.value=''; keyInput.value=''; pwInput.value=''; manualPut.value='';
 
-    // ---- NEW: OTP handling + popup ----
+    // OTP handling + popup
     let otpToUse = manualOtp || generateOtp(6);
     const email = recipientEmailInput ? recipientEmailInput.value.trim() : '';
 
     if(!BACKEND_BASE){
-      // demo mode – cannot send email
       alert('Upload complete.\nOTP: ' + otpToUse + '\n(No email backend configured.)');
     } else if(email){
       try{
@@ -591,7 +578,6 @@ function setMessage(text, ok=true){
   setTimeout(()=>{ uploadMsg.textContent=''; }, 7000);
 }
 
-// ---------- Presign GET request ----------
 async function requestGetPresign(key){
   const decoded = decodeURIComponent(key);
   if(!API_BASE) {
@@ -606,7 +592,7 @@ async function requestGetPresign(key){
       body: JSON.stringify({ key: decoded })
     });
     if(!resp.ok) throw new Error('GET presign failed: '+resp.status);
-    const j = await resp.json();
+    const j = await safeJson(resp);
     getUrlInput.value = j.url;
     alert('Presigned GET placed in the input');
   }catch(e){ alert('Error requesting GET presign: '+e.message); }
@@ -615,7 +601,6 @@ async function requestGetPresign(key){
 document.getElementById('openGetBtn').addEventListener('click', ()=>{ const u = getUrlInput.value.trim(); if(!u) return alert('Paste a presigned GET URL'); window.open(u,'_blank'); });
 document.getElementById('reqGetBtn').addEventListener('click', async ()=>{ const k = prompt('Enter key to presign (e.g. uploads/abc.jpg):'); if(!k) return; await requestGetPresign(encodeURIComponent(k)); });
 
-// ---------- View / Search / List-Grid ----------
 document.querySelectorAll('.nav-item').forEach(el=>{
   el.addEventListener('click', (ev)=>{
     ev.preventDefault();
@@ -641,10 +626,8 @@ applyOtpBtn.addEventListener('click', ()=>{
   alert('Manual OTP applied for next upload/download: ' + v);
 });
 
-// ---------- Initial render ----------
 renderFiles();
 updateCounts();
-
 </script>
 </body>
 </html>
